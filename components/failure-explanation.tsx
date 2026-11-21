@@ -7,7 +7,7 @@ export function FailureExplanation({ failures }: { failures: readonly CaseResult
   return (
     <section className="rounded-xl border border-amber-300 bg-amber-50 p-5" aria-label="Failure explanation">
       <h2 className="flex items-center gap-2 font-semibold text-amber-900">
-        <AlertTriangle className="size-5" /> Why did this regression occur?
+        <AlertTriangle className="size-5" /> Why these cases fail
       </h2>
       {failures.map((f) => (
         <p key={f.id} className="mt-2 text-sm text-amber-900">

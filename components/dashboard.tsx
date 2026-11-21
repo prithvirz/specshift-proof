@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { describeExpectationSource, requirementsDifferFromSeedDefaults } from "@/lib/report/expectation-source";
 import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles, FileText, History, CheckCircle2 } from "lucide-react";
 import { ScenarioEditor } from "@/components/scenario-editor";
 import { EvidenceReport } from "@/components/evidence-report";
@@ -196,6 +197,8 @@ export function Dashboard() {
     [snapshot, oldReq, newReq, generated, threshold.value],
   );
   const failures = snapshot?.results.filter((r) => r.status === "fail") ?? [];
+  const expectations = snapshot ? describeExpectationSource(snapshot.source, snapshot.scenario) : null;
+  const seededTextEdited = requirementsDifferFromSeedDefaults({ oldRequirement: oldReq, newRequirement: newReq });
   const areaClass =
     "mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200";
 
@@ -217,9 +220,9 @@ export function Dashboard() {
           <p>
             Scope: this MVP supports only the controlled booking-cancellation scenario. AI can propose
             test cases from the requirement text, but nothing generates or executes code, and arbitrary requirements
-            cannot be run. Editing the text never changes business logic. Every pass/fail comes from the real legacy
-            <code className="mx-1 rounded bg-sky-100 px-1">canCancelBooking</code> function, which implements the
-            old 24-hour rule.
+            cannot be run. Editing the text never changes business logic. Actual outcomes always come from running the
+            real legacy <code className="mx-1 rounded bg-sky-100 px-1">canCancelBooking</code> function, which implements
+            the old 24-hour rule. Pass/fail compares each actual outcome with the test&apos;s expected outcome.
           </p>
         </div>
 
@@ -252,6 +255,15 @@ export function Dashboard() {
             {generating ? "Generating..." : "Generate Tests with AI"}
           </button>
         </div>
+        {seededTextEdited && (
+          <p className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900" role="status">
+            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              The requirement text differs from the seeded demo. &quot;Run Regression Tests&quot; still uses the fixed seeded
+              cases, which were written for the original text and do not update automatically.
+            </span>
+          </p>
+        )}
         <div className="flex flex-wrap items-end gap-3">
           <label className="block text-sm font-semibold text-slate-900">
             Demo access code (for AI generation)
@@ -334,6 +346,18 @@ export function Dashboard() {
               {snapshot.scenario ? ` (proposed threshold: ${snapshot.scenario.thresholdHours} hours)` : ""}, executed by
               the legacy function
             </p>
+            {expectations && (
+              <p
+                className={`rounded-lg border p-3 text-sm ${
+                  snapshot.source === "ai"
+                    ? "border-violet-300 bg-violet-50 text-violet-900"
+                    : "border-slate-200 bg-white text-slate-700"
+                }`}
+              >
+                <span className="font-semibold">Expected outcomes:</span> {expectations.description} Actual outcomes
+                come from executing the legacy function.
+              </p>
+            )}
             {divergence?.isStale && (
               <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
                 <History className="mt-0.5 size-4 shrink-0" />
@@ -363,7 +387,7 @@ export function Dashboard() {
             <FailureExplanation failures={failures} />
             <ul className="grid gap-3">
               {snapshot.results.map((r) => (
-                <ResultCard key={r.id} result={r} />
+                <ResultCard key={r.id} result={r} expectedLabel={expectations?.expectedLabel ?? "Expected"} />
               ))}
             </ul>
 

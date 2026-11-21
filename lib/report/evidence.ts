@@ -1,6 +1,7 @@
 import { LEGACY_CANCELLATION_THRESHOLD_HOURS } from "@/lib/legacy/cancellation";
 import type { CaseResult, RegressionCase, RunReport, RunSummary } from "@/lib/regression/types";
 import { describeProposedRule, scenarioCases } from "@/lib/scenario/boundary";
+import { PASS_FAIL_BASIS, SEEDED_TEXT_NOTE, describeExpectationSource } from "./expectation-source";
 
 export type EvidenceSource = "seeded" | "ai" | "scenario";
 
@@ -223,6 +224,7 @@ export function toMarkdown(snapshot: EvidenceSnapshot): string {
   const failed = failedResults(snapshot);
   const passed = passedResults(snapshot);
   const { summary } = snapshot;
+  const expectations = describeExpectationSource(snapshot.source, snapshot.scenario);
   const lines: string[] = [
     "# SpecShift Proof: Regression Evidence Report",
     "",
@@ -230,8 +232,9 @@ export function toMarkdown(snapshot: EvidenceSnapshot): string {
     `- **Test source:** ${sourceLabel(snapshot.source)}`,
     `- **Function under test:** \`canCancelBooking\` (legacy rule: \`hoursBeforeStart >= ${LEGACY_CANCELLATION_THRESHOLD_HOURS}\`)`,
     `- **Total:** ${summary.total} | **Passed:** ${summary.passed} | **Failed:** ${summary.failed}`,
+    `- **Expected outcomes:** ${expectations.description}`,
     "",
-    "Pass/fail results come from executing the legacy function. They are not AI claims.",
+    PASS_FAIL_BASIS,
     "",
     "## Requirements at execution time",
     "",
@@ -244,6 +247,8 @@ export function toMarkdown(snapshot: EvidenceSnapshot): string {
     quote(snapshot.newRequirement),
     "",
   ];
+
+  if (snapshot.source === "seeded") lines.push(SEEDED_TEXT_NOTE, "");
 
   if (snapshot.scenario) {
     const t = snapshot.scenario.thresholdHours;
@@ -276,7 +281,7 @@ export function toMarkdown(snapshot: EvidenceSnapshot): string {
         `### Case ${r.id}: hoursBeforeStart = ${r.hoursBeforeStart}`,
         "",
         `- **Input:** \`hoursBeforeStart = ${r.hoursBeforeStart}\``,
-        `- **Expected:** ${describeBehavior(r.expectedAllowed)} (\`${r.expectedAllowed}\`)`,
+        `- **${expectations.expectedLabel}:** ${describeBehavior(r.expectedAllowed)} (\`${r.expectedAllowed}\`)`,
         `- **Actual:** ${describeBehavior(r.actualAllowed)} (\`${r.actualAllowed}\`)`,
         `- **Explanation:** ${explainMismatch(r)}`,
       );
@@ -290,7 +295,7 @@ export function toMarkdown(snapshot: EvidenceSnapshot): string {
   if (passed.length === 0) {
     lines.push("No passing cases.", "");
   } else {
-    lines.push("| Case | Input (hours) | Expected | Actual |", "| --- | --- | --- | --- |");
+    lines.push(`| Case | Input (hours) | ${cell(expectations.expectedLabel)} | Actual |`, "| --- | --- | --- | --- |");
     for (const r of passed) {
       lines.push(
         `| ${r.id} | ${r.hoursBeforeStart} | ${cell(describeBehavior(r.expectedAllowed))} | ${cell(describeBehavior(r.actualAllowed))} |`,

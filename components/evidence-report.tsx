@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Check, ChevronDown, ClipboardCopy, FileText, XCircle } from "lucide-react";
 import { LEGACY_CANCELLATION_THRESHOLD_HOURS } from "@/lib/legacy/cancellation";
 import { describeProposedRule } from "@/lib/scenario/boundary";
+import { PASS_FAIL_BASIS, SEEDED_TEXT_NOTE, describeExpectationSource } from "@/lib/report/expectation-source";
 import {
   describeBehavior,
   explainDirection,
@@ -38,6 +39,7 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
   const failed = failedResults(snapshot);
   const passed = passedResults(snapshot);
   const reasonFor = (id: number) => snapshot.aiContext?.reasons[id - 1];
+  const expectations = describeExpectationSource(snapshot.source, snapshot.scenario);
 
   async function copyReport() {
     try {
@@ -67,7 +69,7 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
           </h3>
           <p className="text-sm text-slate-500">
             Function under test: <code>canCancelBooking</code> (legacy rule{" "}
-            <code>hoursBeforeStart &gt;= {LEGACY_CANCELLATION_THRESHOLD_HOURS}</code>). Pass/fail comes from executing it.
+            <code>hoursBeforeStart &gt;= {LEGACY_CANCELLATION_THRESHOLD_HOURS}</code>). {PASS_FAIL_BASIS}
           </p>
         </div>
         <button
@@ -84,6 +86,14 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
           Previous execution evidence. It reflects the requirements and cases captured below, not your current draft.
         </p>
       )}
+
+      <p
+        className={`rounded-lg border p-3 text-sm ${
+          snapshot.source === "ai" ? "border-violet-300 bg-violet-50 text-violet-900" : "border-slate-200 bg-slate-50 text-slate-800"
+        }`}
+      >
+        <span className="font-semibold">Expected outcomes:</span> {expectations.description}
+      </p>
 
       <dl className={`grid grid-cols-2 gap-3 ${meta.length > 5 ? "sm:grid-cols-6" : "sm:grid-cols-5"}`}>
         {meta.map((m) => (
@@ -102,6 +112,7 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
           <RequirementBlock label="Old requirement" text={snapshot.oldRequirement} />
           <RequirementBlock label="New requirement" text={snapshot.newRequirement} />
         </div>
+        {snapshot.source === "seeded" && <p className="text-xs text-slate-600">{SEEDED_TEXT_NOTE}</p>}
         {snapshot.scenario && (
           <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
             <p className="font-semibold">Proposed scenario rule (determines expected outcomes)</p>
@@ -140,11 +151,11 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
                     <dd className="font-mono">hoursBeforeStart = {r.hoursBeforeStart}</dd>
                   </div>
                   <div>
-                    <dt className="text-slate-500">Expected</dt>
+                    <dt className="text-slate-500">{expectations.expectedLabel}</dt>
                     <dd>{describeBehavior(r.expectedAllowed)}</dd>
                   </div>
                   <div>
-                    <dt className="text-slate-500">Actual</dt>
+                    <dt className="text-slate-500">Actual (legacy function)</dt>
                     <dd>{describeBehavior(r.actualAllowed)}</dd>
                   </div>
                 </dl>
@@ -174,7 +185,7 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
                 <tr>
                   <th className="py-1 pr-4 font-medium">Case</th>
                   <th className="py-1 pr-4 font-medium">Input (hours)</th>
-                  <th className="py-1 pr-4 font-medium">Expected</th>
+                  <th className="py-1 pr-4 font-medium">{expectations.expectedLabel}</th>
                   <th className="py-1 font-medium">Actual</th>
                 </tr>
               </thead>

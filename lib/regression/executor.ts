@@ -24,7 +24,7 @@ export function runRegressionCases(
 
     const explanation = passed
       ? `With ${hours} before start, cancellation is ${describeAllowed(actualAllowed)}, as expected.`
-      : `With ${hours} before start, the requirement expects cancellation to be ${describeAllowed(testCase.expectedAllowed)}, but the legacy function returned ${describeAllowed(actualAllowed)}.`;
+      : `With ${hours} before start, the test expects cancellation to be ${describeAllowed(testCase.expectedAllowed)}, but the legacy function returned ${describeAllowed(actualAllowed)}.`;
 
     return {
       id: index + 1,

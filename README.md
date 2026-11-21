@@ -156,7 +156,8 @@ The access code limits who can use Gemini. It does not stop distributed abuse by
 ## Current limitations
 
 - Only the booking-cancellation scenario and the single hard-coded `canCancelBooking` function are supported. Arbitrary requirements or repositories cannot be executed.
-- Gemini proposes inputs and expected outcomes only. It never generates or runs code and never decides pass/fail. Its expected outcomes can still be wrong, so review the cases before running them.
+- Gemini proposes inputs and expected outcomes only. It never generates or runs code. Actual outcomes always come from the legacy function, and pass/fail is a deterministic comparison with the expected outcome. Gemini's expected outcomes can be wrong, so a failure in a Gemini run may mean the expectation was wrong. Results and reports label each run's expectation source: fixed demo cases, proposed by Gemini, or derived from the scenario threshold.
+- The seeded cases are fixed. They do not update when the requirement text is edited, and the dashboard warns when the text differs from the seeded defaults.
 - Editing the requirement text never changes business logic. It only affects what Gemini is asked to analyze. The scenario editor ignores the text entirely.
 - The scenario editor supports one rule shape (`hoursBeforeStart >= T`) with whole-hour thresholds from 0 to 168 and no fractional boundary cases. Its expected outcomes are only as correct as the threshold you choose.
 - Evidence reports live in browser memory. Only the latest run is kept, and it disappears on reload. Export is Markdown via the clipboard only.

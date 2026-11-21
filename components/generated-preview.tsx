@@ -26,7 +26,7 @@ export function GeneratedPreview({ generated }: { generated: GenerationRecord["o
           ))}
         </ul>
         <p className="mt-2 text-xs text-slate-500">
-          The AI only proposes inputs and expected outcomes. Pass/fail is decided by running the real legacy function.
+          These expected outcomes were proposed by Gemini and may be incorrect. Running them executes the real legacy function, and pass/fail compares its actual result with each expectation.
         </p>
       </div>
     </section>

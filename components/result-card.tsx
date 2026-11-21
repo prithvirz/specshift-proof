@@ -3,7 +3,7 @@ import type { CaseResult } from "@/lib/regression/types";
 
 const label = (allowed: boolean) => (allowed ? "Allowed (true)" : "Blocked (false)");
 
-export function ResultCard({ result }: { result: CaseResult }) {
+export function ResultCard({ result, expectedLabel }: { result: CaseResult; expectedLabel: string }) {
   const pass = result.status === "pass";
   return (
     <li
@@ -30,11 +30,11 @@ export function ResultCard({ result }: { result: CaseResult }) {
           <dd className="font-mono text-slate-900">hoursBeforeStart = {result.hoursBeforeStart}</dd>
         </div>
         <div>
-          <dt className="text-slate-500">Expected</dt>
+          <dt className="text-slate-500">{expectedLabel}</dt>
           <dd className="font-mono text-slate-900">{label(result.expectedAllowed)}</dd>
         </div>
         <div>
-          <dt className="text-slate-500">Actual</dt>
+          <dt className="text-slate-500">Actual (legacy function)</dt>
           <dd className="font-mono text-slate-900">{label(result.actualAllowed)}</dd>
         </div>
       </dl>
