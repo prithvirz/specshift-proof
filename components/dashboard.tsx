@@ -1,12 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Play, ShieldCheck, Info, AlertCircle } from "lucide-react";
+import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles } from "lucide-react";
+import { GeneratedPreview } from "@/components/generated-preview";
 import { FailureExplanation } from "@/components/failure-explanation";
 import { ResultCard } from "@/components/result-card";
 import { SummaryBar } from "@/components/summary-bar";
 import { NEW_REQUIREMENT, OLD_REQUIREMENT, SEED_CASES } from "@/lib/regression/seed";
-import type { RunReport } from "@/lib/regression/types";
+import type { GeneratedTests } from "@/lib/ai/schema";
+import type { RegressionCase, RunReport } from "@/lib/regression/types";
+
+async function readError(res: Response): Promise<string> {
+  const data: unknown = await res.json().catch(() => null);
+  if (data && typeof data === "object" && "error" in data && typeof data.error === "string") {
+    return data.error;
+  }
+  return `Request failed with status ${res.status}.`;
+}
 
 export function Dashboard() {
   const [oldReq, setOldReq] = useState(OLD_REQUIREMENT);
@@ -14,33 +24,62 @@ export function Dashboard() {
   const [report, setReport] = useState<RunReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<"seeded" | "ai" | null>(null);
+  const [runningFrom, setRunningFrom] = useState<"seeded" | "ai" | null>(null);
+  const [generated, setGenerated] = useState<GeneratedTests | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
 
-  async function run() {
+  async function run(cases: readonly RegressionCase[], from: "seeded" | "ai") {
     setLoading(true);
+    setRunningFrom(from);
     setError(null);
     try {
       const res = await fetch("/api/run-tests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cases: SEED_CASES }),
+        body: JSON.stringify({ cases }),
       });
-      const data: unknown = await res.json().catch(() => null);
-      if (!res.ok) {
-        const message =
-          data && typeof data === "object" && "error" in data && typeof data.error === "string"
-            ? data.error
-            : `Request failed with status ${res.status}.`;
-        throw new Error(message);
-      }
-      setReport(data as RunReport);
+      if (!res.ok) throw new Error(await readError(res));
+      setReport((await res.json()) as RunReport);
+      setSource(from);
     } catch (e) {
       setReport(null);
+      setSource(null);
       setError(e instanceof Error ? e.message : "Unexpected error running tests.");
     } finally {
       setLoading(false);
+      setRunningFrom(null);
     }
   }
 
+  async function generate() {
+    setGenerating(true);
+    setGenError(null);
+    setGenerated(null);
+    try {
+      const res = await fetch("/api/generate-tests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oldRequirement: oldReq, newRequirement: newReq }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      setGenerated((await res.json()) as GeneratedTests);
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : "Unexpected error generating tests.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  function runGenerated() {
+    if (!generated) return;
+    // Send only the executable fields; `reason` is display-only.
+    void run(
+      generated.testCases.map(({ hoursBeforeStart, expectedAllowed }) => ({ hoursBeforeStart, expectedAllowed })),
+      "ai",
+    );
+  }
   const failures = report?.results.filter((r) => r.status === "fail") ?? [];
   const areaClass =
     "mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200";
@@ -61,8 +100,9 @@ export function Dashboard() {
         <div className="flex gap-2 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
           <Info className="mt-0.5 size-4 shrink-0" />
           <p>
-            Phase 1 demo. The requirement text below is informational only. Editing it does not regenerate tests
-            or change business logic. The three seeded cases always run against the real legacy
+            Scope: this MVP supports only the controlled booking-cancellation scenario. AI can propose
+            test cases from the requirement text, but nothing generates or executes code, and arbitrary requirements
+            cannot be run. Editing the text never changes business logic. Every pass/fail comes from the real legacy
             <code className="mx-1 rounded bg-sky-100 px-1">canCancelBooking</code> function, which implements the
             old 24-hour rule.
           </p>
@@ -79,14 +119,49 @@ export function Dashboard() {
           </label>
         </section>
 
-        <button
-          onClick={run}
-          disabled={loading}
-          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-indigo-700 disabled:opacity-60"
-        >
-          {loading ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-          {loading ? "Running..." : "Run Regression Tests"}
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={() => void run(SEED_CASES, "seeded")}
+            disabled={loading || generating}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {runningFrom === "seeded" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+            Run Regression Tests
+          </button>
+          <button
+            onClick={() => void generate()}
+            disabled={loading || generating}
+            className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-violet-700 disabled:opacity-60"
+          >
+            {generating ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+            {generating ? "Generating..." : "Generate Tests with AI"}
+          </button>
+        </div>
+        <p className="text-xs text-slate-500">
+          &quot;Run Regression Tests&quot; uses the built-in seeded cases and works without an API key. AI generation
+          needs <code>GEMINI_API_KEY</code> on the server.
+        </p>
+
+        {genError && (
+          <div role="alert" className="flex gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
+            <AlertCircle className="mt-0.5 size-4 shrink-0" />
+            <p>{genError}</p>
+          </div>
+        )}
+
+        {generated && (
+          <div className="space-y-3">
+            <GeneratedPreview generated={generated} />
+            <button
+              onClick={runGenerated}
+              disabled={loading || generating}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-emerald-700 disabled:opacity-60"
+            >
+              {runningFrom === "ai" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+              {runningFrom === "ai" ? "Running..." : "Run Generated Tests"}
+            </button>
+          </div>
+        )}
 
         {error && (
           <div role="alert" className="flex gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
@@ -97,6 +172,9 @@ export function Dashboard() {
 
         {report && (
           <section className="space-y-4" aria-live="polite">
+            <p className="text-sm font-semibold text-slate-700">
+              Results for {source === "ai" ? "AI-generated cases" : "seeded demo cases"} (executed by the legacy function)
+            </p>
             <SummaryBar summary={report.summary} />
             <FailureExplanation failures={failures} />
             <ul className="grid gap-3">
@@ -110,3 +188,5 @@ export function Dashboard() {
     </div>
   );
 }
+
+
