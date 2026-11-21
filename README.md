@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SpecShift Proof
 
-## Getting Started
+SpecShift Proof detects behavioral regressions caused by software requirement changes. Phase 1 is a controlled, deterministic demo built around one booking-cancellation rule.
 
-First, run the development server:
+## The demo
+
+| | Requirement |
+|---|---|
+| Old | Customers may cancel their booking if at least **24 hours** remain before the booking starts. |
+| New | Customers may cancel their booking if at least **2 hours** remain before the booking starts. |
+
+`lib/legacy/cancellation.ts` exports `canCancelBooking(hoursBeforeStart)`, which implements the **old** rule (`>= 24`). It is intentionally not updated. Three regression cases written for the new requirement run against it:
+
+| Hours | Expected | Actual | Result |
+|---|---|---|---|
+| 1 | blocked | blocked | PASS |
+| 3 | allowed | blocked | **FAIL** |
+| 25 | allowed | allowed | PASS |
+
+The dashboard shows 2 passed and 1 failed. The failure is the demo's intended output, not a bug. The Vitest suite still passes.
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev      # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Other scripts: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## API
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`POST /api/run-tests` with `{ "cases": [{ "hoursBeforeStart": 3, "expectedAllowed": true }] }`.
 
-## Learn More
+Validated with Zod: 1 to 20 cases, `hoursBeforeStart` finite and between 0 and 10000, `expectedAllowed` boolean. Only structured data is accepted. No user-submitted code is executed. Invalid input returns HTTP 400.
 
-To learn more about Next.js, take a look at the following resources:
+## Structure
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `lib/legacy/` legacy business rule
+- `lib/regression/` executor, Zod schema, types, seed data (no UI code)
+- `app/api/run-tests/` API route
+- `components/` UI components
+- `tests/` Vitest unit tests
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Current limitations
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- The requirement text areas are informational only. Editing them does not regenerate tests or change business logic.
+- The test cases are fixed seed data. The UI does not edit them.
+- Only the one hard-coded `canCancelBooking` function can be tested. Arbitrary repositories are not supported.
+- No requirement interpretation, AI, authentication, or database.
