@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles, FileText, History } from "lucide-react";
+import { EvidenceReport } from "@/components/evidence-report";
 import { GeneratedPreview } from "@/components/generated-preview";
 import { FailureExplanation } from "@/components/failure-explanation";
 import { ResultCard } from "@/components/result-card";
@@ -9,6 +10,13 @@ import { SummaryBar } from "@/components/summary-bar";
 import { NEW_REQUIREMENT, OLD_REQUIREMENT, SEED_CASES } from "@/lib/regression/seed";
 import type { GeneratedTests } from "@/lib/ai/schema";
 import type { RegressionCase, RunReport } from "@/lib/regression/types";
+import {
+  compareWithDraft,
+  createEvidenceSnapshot,
+  type AiContext,
+  type EvidenceSnapshot,
+  type EvidenceSource,
+} from "@/lib/report/evidence";
 
 async function readError(res: Response): Promise<string> {
   const data: unknown = await res.json().catch(() => null);
@@ -21,16 +29,18 @@ async function readError(res: Response): Promise<string> {
 export function Dashboard() {
   const [oldReq, setOldReq] = useState(OLD_REQUIREMENT);
   const [newReq, setNewReq] = useState(NEW_REQUIREMENT);
-  const [report, setReport] = useState<RunReport | null>(null);
+  const [snapshot, setSnapshot] = useState<EvidenceSnapshot | null>(null);
+  const [showEvidence, setShowEvidence] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<"seeded" | "ai" | null>(null);
-  const [runningFrom, setRunningFrom] = useState<"seeded" | "ai" | null>(null);
+  const [runningFrom, setRunningFrom] = useState<EvidenceSource | null>(null);
   const [generated, setGenerated] = useState<GeneratedTests | null>(null);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
 
-  async function run(cases: readonly RegressionCase[], from: "seeded" | "ai") {
+  async function run(cases: readonly RegressionCase[], from: EvidenceSource, aiContext?: AiContext) {
+    // Capture the draft at click time so later edits cannot leak into this run's evidence.
+    const captured = { oldRequirement: oldReq, newRequirement: newReq, cases: cases.map((c) => ({ ...c })) };
     setLoading(true);
     setRunningFrom(from);
     setError(null);
@@ -41,11 +51,20 @@ export function Dashboard() {
         body: JSON.stringify({ cases }),
       });
       if (!res.ok) throw new Error(await readError(res));
-      setReport((await res.json()) as RunReport);
-      setSource(from);
+      const report = (await res.json()) as RunReport;
+      setSnapshot(
+        createEvidenceSnapshot({
+          executedAt: new Date(),
+          source: from,
+          oldRequirement: captured.oldRequirement,
+          newRequirement: captured.newRequirement,
+          cases: captured.cases,
+          report,
+          aiContext,
+        }),
+      );
     } catch (e) {
-      setReport(null);
-      setSource(null);
+      setSnapshot(null);
       setError(e instanceof Error ? e.message : "Unexpected error running tests.");
     } finally {
       setLoading(false);
@@ -78,9 +97,27 @@ export function Dashboard() {
     void run(
       generated.testCases.map(({ hoursBeforeStart, expectedAllowed }) => ({ hoursBeforeStart, expectedAllowed })),
       "ai",
+      {
+        changeSummary: generated.changeSummary,
+        reasons: generated.testCases.map((c) => c.reason),
+      },
     );
   }
-  const failures = report?.results.filter((r) => r.status === "fail") ?? [];
+
+  const divergence = useMemo(
+    () =>
+      snapshot
+        ? compareWithDraft(snapshot, {
+            oldRequirement: oldReq,
+            newRequirement: newReq,
+            generatedCases: generated
+              ? generated.testCases.map(({ hoursBeforeStart, expectedAllowed }) => ({ hoursBeforeStart, expectedAllowed }))
+              : null,
+          })
+        : null,
+    [snapshot, oldReq, newReq, generated],
+  );
+  const failures = snapshot?.results.filter((r) => r.status === "fail") ?? [];
   const areaClass =
     "mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200";
 
@@ -170,23 +207,53 @@ export function Dashboard() {
           </div>
         )}
 
-        {report && (
+        {snapshot && (
           <section className="space-y-4" aria-live="polite">
             <p className="text-sm font-semibold text-slate-700">
-              Results for {source === "ai" ? "AI-generated cases" : "seeded demo cases"} (executed by the legacy function)
+              Results for {snapshot.source === "ai" ? "AI-generated cases" : "seeded demo cases"} (executed by the
+              legacy function)
             </p>
-            <SummaryBar summary={report.summary} />
+            {divergence?.isStale && (
+              <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+                <History className="mt-0.5 size-4 shrink-0" />
+                <p>
+                  <strong>Previous execution evidence.</strong>{" "}
+                  {[
+                    divergence.requirementsChanged && "The requirement text has been edited",
+                    divergence.casesChanged && "the generated cases have changed",
+                  ]
+                    .filter(Boolean)
+                    .join(" and ")}{" "}
+                  since these tests ran. These results reflect the inputs captured in the evidence report, not the
+                  current draft. Run the tests again to produce new evidence.
+                </p>
+              </div>
+            )}
+            <SummaryBar summary={snapshot.summary} />
             <FailureExplanation failures={failures} />
             <ul className="grid gap-3">
-              {report.results.map((r) => (
+              {snapshot.results.map((r) => (
                 <ResultCard key={r.id} result={r} />
               ))}
             </ul>
+
+            <div className="space-y-3 border-t border-slate-200 pt-4">
+              <button
+                onClick={() => setShowEvidence((v) => !v)}
+                aria-expanded={showEvidence}
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2.5 font-semibold text-white shadow hover:bg-slate-800"
+              >
+                <FileText className="size-4" />
+                {showEvidence ? "Hide Evidence Report" : "View Evidence Report"}
+              </button>
+              {showEvidence && <EvidenceReport snapshot={snapshot} isStale={divergence?.isStale ?? false} />}
+            </div>
           </section>
         )}
       </main>
     </div>
   );
 }
+
 
 
