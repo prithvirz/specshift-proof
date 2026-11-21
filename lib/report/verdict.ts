@@ -1,4 +1,4 @@
-import type { EvidenceSnapshot } from "./evidence";
+import { isScenarioNoRegression, noRegressionMessage, type EvidenceSnapshot } from "./evidence";
 
 export type VerdictTone = "regression" | "mismatch" | "pass";
 
@@ -53,4 +53,16 @@ export function shouldNavigateToResults(
   next: EvidenceSnapshot | null,
 ): boolean {
   return next !== null && next !== previous;
+}
+
+/**
+ * The verdict to display. A passing scenario run adds the threshold-specific
+ * "No regression detected" message as the verdict note, so only one green banner is shown.
+ */
+export function verdictForDisplay(snapshot: EvidenceSnapshot): Verdict {
+  const verdict = describeVerdict(snapshot);
+  if (snapshot.scenario && isScenarioNoRegression(snapshot)) {
+    return { ...verdict, note: noRegressionMessage(snapshot.scenario.thresholdHours) };
+  }
+  return verdict;
 }

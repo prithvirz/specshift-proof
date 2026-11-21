@@ -61,10 +61,18 @@ Other scripts: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`,
 
 ## Using the dashboard
 
-1. **Seeded demo:** click **Run Regression Tests** to execute the three seeded cases.
-2. **AI generation:** enter the demo access code, then click **Generate Tests with AI**. The code is kept in page memory only. It is not saved, put in the URL, or included in evidence reports. Gemini reads both requirements and returns a change summary plus 5 to 8 proposed cases, each with a reason. Review them, then click **Run Generated Tests**. The generated cases are bound to the exact requirement text sent to Gemini. If you edit either requirement afterward, **Run Generated Tests** is disabled until you regenerate. If a regeneration fails, the previous cases stay unchanged and the error says so.
-3. **Scenario editor:** enter a proposed threshold *T* (whole hours, 0 to 168, default 2), review the generated boundary cases, then click **Run Scenario Tests**.
-4. **Evidence report:** after any run, click **View Evidence Report** below the results.
+The top of the page tells the story in three steps: the requirement changed from 24 hours to 2 hours, the legacy code still enforces `hours >= 24`, and SpecShift runs real tests to show the gap. Below that are the primary action, the editable requirement text, and two optional workflows.
+
+1. **Run Demo Tests (primary):** runs the three fixed seeded cases. No API key or access code is needed.
+2. **Generate tests with Gemini (optional section):** enter the demo access code, then click **Generate Tests with AI**. The code is kept in page memory only. It is not saved, put in the URL, or included in evidence reports. Gemini reads both requirements and returns a change summary plus 5 to 8 proposed cases, each with a reason. Review them, then click **Run Generated Tests**. The generated cases are bound to the exact requirement text sent to Gemini. If you edit either requirement afterward, **Run Generated Tests** is disabled until you regenerate. If a regeneration fails, the previous cases stay unchanged and the error says so.
+3. **Scenario editor (optional section):** enter a proposed threshold *T* (whole hours, 0 to 168, default 2), review the generated boundary cases, then click **Run Scenario Tests**.
+4. **Results:** after any run, the page scrolls to the results and moves keyboard focus to the results heading. A verdict banner sits above the counts:
+   - **Regression detected** (red), with "N of M test cases failed", for seeded and scenario runs with failures;
+   - **Mismatch detected**, for Gemini runs with failures, because Gemini-proposed expectations need review before a failure counts as a regression;
+   - **All tests passed** (green), with "0 of M test cases failed". For a passing scenario run, the same banner also says no regression was detected for that threshold.
+
+   The verdict is counted from the executed results, never from Gemini. While a new run is in progress, the previous results stay visible but dimmed. A run error appears next to the button that started the run.
+5. **Evidence report:** click **View Evidence Report** below the results.
 
 ### Scenario editor
 
@@ -91,7 +99,7 @@ Each successful run creates an immutable snapshot containing:
 
 The report lists every failed case with its input, expected behavior, actual behavior, and a deterministic explanation derived from the executed values and the legacy 24-hour threshold. Passing cases are in a collapsible section. **Copy Report** copies a Markdown version to the clipboard.
 
-Failure explanations cover both directions: the legacy rule blocking a cancellation the test expects to be allowed, and allowing one the test expects to be blocked. When every scenario case passes, the results and report say **No regression detected** for that threshold.
+Failure explanations cover both directions: the legacy rule blocking a cancellation the test expects to be allowed, and allowing one the test expects to be blocked. When every scenario case passes, the verdict banner and report say **No regression detected** for that threshold.
 
 If you edit the requirement text after a run, the results and report are labeled **Previous execution evidence**. The same applies when you regenerate or replace the AI cases after a Gemini run, or change the threshold after a scenario run. They are never relabeled to match the new draft. Run the tests again to produce new evidence. Before creating a snapshot, the app checks that each result matches its submitted case and that the counts add up. For scenario runs, it also checks that the cases are exactly the boundary cases for the recorded threshold.
 

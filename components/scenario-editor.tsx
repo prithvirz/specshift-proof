@@ -29,7 +29,7 @@ export function ScenarioEditor({
   running,
 }: ScenarioEditorProps) {
   return (
-    <section className="space-y-4 rounded-xl border border-teal-200 bg-white p-5 shadow-sm" aria-label="Scenario editor">
+    <section className="space-y-4 rounded-xl border border-teal-200 bg-white p-4 shadow-sm sm:p-5" aria-label="Scenario editor">
       <div>
         <h2 className="flex items-center gap-2 font-semibold text-slate-900">
           <SlidersHorizontal className="size-4 text-teal-600" /> Scenario editor (deterministic)
@@ -95,7 +95,7 @@ export function ScenarioEditor({
       <button
         onClick={onRun}
         disabled={disabled || threshold === null}
-        className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-teal-700 disabled:opacity-60"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 py-2 font-semibold text-white shadow-sm hover:bg-teal-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-300 disabled:opacity-60 sm:w-auto"
       >
         {running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
         {running ? "Running..." : "Run Scenario Tests"}

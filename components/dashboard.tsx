@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { VerdictBanner } from "@/components/verdict-banner";
-import { describeVerdict, shouldNavigateToResults } from "@/lib/report/verdict";
+import { shouldNavigateToResults, verdictForDisplay } from "@/lib/report/verdict";
 import { describeExpectationSource, requirementsDifferFromSeedDefaults } from "@/lib/report/expectation-source";
-import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles, FileText, History, CheckCircle2 } from "lucide-react";
+import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles, FileText, History } from "lucide-react";
+import { LEGACY_CANCELLATION_THRESHOLD_HOURS } from "@/lib/legacy/cancellation";
 import { ScenarioEditor } from "@/components/scenario-editor";
 import { EvidenceReport } from "@/components/evidence-report";
 import { GeneratedPreview } from "@/components/generated-preview";
@@ -34,8 +35,6 @@ import type { RegressionCase, RunReport } from "@/lib/regression/types";
 import {
   compareWithDraft,
   createEvidenceSnapshot,
-  isScenarioNoRegression,
-  noRegressionMessage,
   sourceLabel,
   type AiContext,
   type EvidenceSnapshot,
@@ -223,179 +222,249 @@ export function Dashboard() {
   }, [snapshot]);
 
   const failures = snapshot?.results.filter((r) => r.status === "fail") ?? [];
-  const verdict = snapshot ? describeVerdict(snapshot) : null;
+  // A passing scenario run gets one combined green banner instead of two.
+  const verdictToShow = snapshot ? verdictForDisplay(snapshot) : null;
   const expectations = snapshot ? describeExpectationSource(snapshot.source, snapshot.scenario) : null;
   const seededTextEdited = requirementsDifferFromSeedDefaults({ oldRequirement: oldReq, newRequirement: newReq });
+  const busy = loading || generating;
   const areaClass =
-    "mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200";
+    "mt-1 w-full rounded-lg border border-slate-300 bg-white p-3 text-sm font-normal text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200";
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-indigo-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-4">
-          <ShieldCheck className="size-8 text-indigo-600" />
-          <div>
-            <h1 className="text-xl font-bold">SpecShift Proof</h1>
-            <p className="text-sm text-slate-500">Detect behavioral regressions caused by requirement changes</p>
-          </div>
+        <div className="mx-auto flex max-w-5xl items-center gap-2 px-4 py-3">
+          <ShieldCheck className="size-6 text-indigo-600" aria-hidden="true" />
+          <p className="font-bold tracking-tight">SpecShift Proof</p>
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl space-y-6 px-4 py-8">
-        <div className="flex gap-2 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
-          <Info className="mt-0.5 size-4 shrink-0" />
-          <p>
-            Scope: this MVP supports only the controlled booking-cancellation scenario. AI can propose
-            test cases from the requirement text, but nothing generates or executes code, and arbitrary requirements
-            cannot be run. Editing the text never changes business logic. Actual outcomes always come from running the
-            real legacy <code className="mx-1 rounded bg-sky-100 px-1">canCancelBooking</code> function, which implements
-            the old 24-hour rule. Pass/fail compares each actual outcome with the test&apos;s expected outcome.
-          </p>
-        </div>
-
-        <section className="grid gap-4 md:grid-cols-2">
-          <label className="block text-sm font-semibold">
-            Old requirement
-            <textarea className={areaClass} rows={4} value={oldReq} onChange={(e) => setOldReq(e.target.value)} />
-          </label>
-          <label className="block text-sm font-semibold">
-            New requirement
-            <textarea className={areaClass} rows={4} value={newReq} onChange={(e) => setNewReq(e.target.value)} />
-          </label>
-        </section>
-
-        <div className="flex flex-wrap gap-3">
-          <button
-            onClick={() => void run(SEED_CASES, "seeded")}
-            disabled={loading || generating}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-indigo-700 disabled:opacity-60"
-          >
-            {runningFrom === "seeded" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-            Run Regression Tests
-          </button>
-          <button
-            onClick={() => void generate()}
-            disabled={loading || generating}
-            className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-violet-700 disabled:opacity-60"
-          >
-            {generating ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-            {generating ? "Generating..." : "Generate Tests with AI"}
-          </button>
-        </div>
-        {runError?.from === "seeded" && <RunError message={runError.message} />}
-        {seededTextEdited && (
-          <p className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900" role="status">
-            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-            <span>
-              The requirement text differs from the seeded demo. &quot;Run Regression Tests&quot; still uses the fixed seeded
-              cases, which were written for the original text and do not update automatically.
-            </span>
-          </p>
-        )}
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="block text-sm font-semibold text-slate-900">
-            Demo access code (for AI generation)
-            <input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              value={accessCode}
-              onChange={(e) => setAccessCode(e.target.value)}
-              placeholder="Required for Generate Tests with AI"
-              className="mt-1 block w-72 max-w-full rounded-lg border border-slate-300 bg-white p-2 text-sm font-normal text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-200"
-            />
-          </label>
-        </div>
-        <p className="text-xs text-slate-500">
-          &quot;Run Regression Tests&quot; and the scenario editor work without an access code or API key. AI generation
-          must be enabled on the server and needs the demo access code. The code is kept in this page only and is not
-          saved.
-        </p>
-
-        {generation.error && (
-          <div role="alert" className="flex gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
-            <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <p>
-              {generation.error}
-              {generation.keptPrevious && (
-                <> No new cases were generated. The cases below are from the previous successful generation.</>
-              )}
+      <main className="mx-auto max-w-5xl space-y-8 px-4 py-8 sm:py-10">
+        {/* 30-second story */}
+        <section className="space-y-6" aria-labelledby="hero-heading">
+          <div className="space-y-3">
+            <h1 id="hero-heading" className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">
+              Requirements changed. Did your code?
+            </h1>
+            <p className="max-w-3xl text-base text-slate-600 sm:text-lg">
+              SpecShift Proof runs real tests against existing code and highlights where its behavior no longer matches
+              a changed requirement.
             </p>
           </div>
-        )}
 
-        {generated && (
+          <ol className="grid gap-3 sm:grid-cols-3">
+            <li className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">1 · Requirement changed</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">24 h → 2 h</p>
+              <p className="mt-1 text-sm text-slate-600">
+                Customers may now cancel up to 2 hours before a booking starts, instead of 24.
+              </p>
+            </li>
+            <li className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-600">2 · Code still says 24 h</p>
+              <p className="mt-2 break-words font-mono text-lg font-bold text-slate-900">
+                hours &gt;= {LEGACY_CANCELLATION_THRESHOLD_HOURS}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                The legacy <code className="rounded bg-slate-100 px-1">canCancelBooking</code> function was never
+                updated.
+              </p>
+            </li>
+            <li className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-rose-600">3 · SpecShift shows the gap</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">Real tests</p>
+              <p className="mt-1 text-sm text-slate-600">
+                It runs test cases against the actual function and highlights every mismatch.
+              </p>
+            </li>
+          </ol>
+
           <div className="space-y-3">
-            <GeneratedPreview generated={generated.output} />
-            {!generationIsCurrent && (
-              <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
-                <History className="mt-0.5 size-4 shrink-0" />
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+              <button
+                onClick={() => void run(SEED_CASES, "seeded")}
+                disabled={busy}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-7 py-3.5 text-lg font-bold text-white shadow-md hover:bg-indigo-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-indigo-300 disabled:opacity-60 sm:w-auto"
+              >
+                {runningFrom === "seeded" ? (
+                  <Loader2 className="size-5 animate-spin" />
+                ) : (
+                  <Play className="size-5" />
+                )}
+                {runningFrom === "seeded" ? "Running..." : "Run Demo Tests"}
+              </button>
+              <p className="text-sm text-slate-500">3 fixed demo cases. No API key or access code needed.</p>
+            </div>
+            {runError?.from === "seeded" && <RunError message={runError.message} />}
+            {seededTextEdited && (
+              <p
+                className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
+                role="status"
+              >
+                <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  The requirement text differs from the seeded demo. &quot;Run Demo Tests&quot; still uses the fixed
+                  seeded cases, which were written for the original text and do not update automatically.
+                </span>
+              </p>
+            )}
+          </div>
+
+          <p className="flex gap-2 text-xs text-slate-500">
+            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <span>
+              Demo scope: one controlled booking-cancellation rule. SpecShift does not analyze arbitrary repositories
+              or change code. Actual outcomes always come from running the real legacy function, and pass/fail compares
+              them with each test&apos;s expected outcome.
+            </span>
+          </p>
+        </section>
+
+        {/* Requirement text */}
+        <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5" aria-labelledby="requirements-heading">
+          <div>
+            <h2 id="requirements-heading" className="font-semibold text-slate-900">
+              Requirement text
+            </h2>
+            <p className="text-sm text-slate-600">
+              Sent to Gemini for AI generation and recorded in each evidence report. Editing it never changes the code.
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="block text-sm font-semibold text-slate-800">
+              Old requirement
+              <textarea className={areaClass} rows={3} value={oldReq} onChange={(e) => setOldReq(e.target.value)} />
+            </label>
+            <label className="block text-sm font-semibold text-slate-800">
+              New requirement
+              <textarea className={areaClass} rows={3} value={newReq} onChange={(e) => setNewReq(e.target.value)} />
+            </label>
+          </div>
+        </section>
+
+        <div className="space-y-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Optional workflows</p>
+
+          {/* Optional AI section */}
+          <section
+            className="space-y-4 rounded-xl border border-violet-200 bg-white p-4 shadow-sm sm:p-5"
+            aria-labelledby="ai-heading"
+          >
+            <div>
+              <h2 id="ai-heading" className="flex items-center gap-2 font-semibold text-slate-900">
+                <Sparkles className="size-4 text-violet-600" aria-hidden="true" /> Generate tests with Gemini (optional)
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Gemini proposes test cases from the requirement text. You review them, then run them against the same
+                legacy function. AI generation must be enabled on the server and needs the demo access code.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="block text-sm font-semibold text-slate-900">
+                Demo access code
+                <input
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={accessCode}
+                  onChange={(e) => setAccessCode(e.target.value)}
+                  placeholder="Required for AI generation"
+                  className="mt-1 block w-full rounded-lg border border-slate-300 bg-white p-2 text-sm font-normal text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-200 sm:w-72"
+                />
+              </label>
+              <button
+                onClick={() => void generate()}
+                disabled={busy}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-violet-300 bg-white px-4 py-2 font-semibold text-violet-700 hover:bg-violet-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-60 sm:w-auto"
+              >
+                {generating ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                {generating ? "Generating..." : "Generate Tests with AI"}
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">The access code stays in this page and is never saved.</p>
+
+            {generation.error && (
+              <div role="alert" className="flex gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
                 <p>
-                  <strong>These cases are out of date.</strong> The requirement text has been edited since these cases
-                  were generated, so they may not match it. Click &quot;Generate Tests with AI&quot; to regenerate
-                  before running.
+                  {generation.error}
+                  {generation.keptPrevious && (
+                    <> No new cases were generated. The cases below are from the previous successful generation.</>
+                  )}
                 </p>
               </div>
             )}
-            <button
-              onClick={runGenerated}
-              disabled={loading || generating || !generationIsCurrent}
-              title={generationIsCurrent ? undefined : "Regenerate the tests: the requirements changed"}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-emerald-700 disabled:opacity-60"
-            >
-              {runningFrom === "ai" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-              {runningFrom === "ai" ? "Running..." : "Run Generated Tests"}
-            </button>
-            {runError?.from === "ai" && <RunError message={runError.message} />}
-          </div>
-        )}
 
-        <ScenarioEditor
-          rawThreshold={rawThreshold}
-          onThresholdChange={setRawThreshold}
-          threshold={threshold.value}
-          validationError={threshold.error}
-          cases={boundaryCases}
-          onRun={runScenario}
-          disabled={loading || generating}
-          running={runningFrom === "scenario"}
-        />
+            {generated && (
+              <div className="space-y-3">
+                <GeneratedPreview generated={generated.output} />
+                {!generationIsCurrent && (
+                  <div
+                    className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"
+                    role="status"
+                  >
+                    <History className="mt-0.5 size-4 shrink-0" />
+                    <p>
+                      <strong>These cases are out of date.</strong> The requirement text has been edited since these
+                      cases were generated, so they may not match it. Click &quot;Generate Tests with AI&quot; to
+                      regenerate before running.
+                    </p>
+                  </div>
+                )}
+                <button
+                  onClick={runGenerated}
+                  disabled={busy || !generationIsCurrent}
+                  title={generationIsCurrent ? undefined : "Regenerate the tests: the requirements changed"}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 font-semibold text-white shadow-sm hover:bg-violet-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 disabled:opacity-60 sm:w-auto"
+                >
+                  {runningFrom === "ai" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+                  {runningFrom === "ai" ? "Running..." : "Run Generated Tests"}
+                </button>
+                {runError?.from === "ai" && <RunError message={runError.message} />}
+              </div>
+            )}
+          </section>
 
-        {runError?.from === "scenario" && <RunError message={runError.message} />}
+          <ScenarioEditor
+            rawThreshold={rawThreshold}
+            onThresholdChange={setRawThreshold}
+            threshold={threshold.value}
+            validationError={threshold.error}
+            cases={boundaryCases}
+            onRun={runScenario}
+            disabled={busy}
+            running={runningFrom === "scenario"}
+          />
+          {runError?.from === "scenario" && <RunError message={runError.message} />}
+        </div>
 
         {snapshot && (
           <section
-            className={`scroll-mt-4 space-y-4 transition-opacity ${loading ? "opacity-60" : ""}`}
+            className={`scroll-mt-4 space-y-4 border-t border-slate-200 pt-8 transition-opacity ${loading ? "opacity-60" : ""}`}
             aria-live="polite"
             aria-busy={loading}
             aria-labelledby="results-heading"
           >
-            <h2
-              id="results-heading"
-              ref={resultsHeadingRef}
-              tabIndex={-1}
-              className="scroll-mt-4 rounded text-sm font-semibold text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
-            >
-              Results for {sourceLabel(snapshot.source)}
-              {snapshot.scenario ? ` (proposed threshold: ${snapshot.scenario.thresholdHours} hours)` : ""}, executed by
-              the legacy function
-            </h2>
+            <div>
+              <h2
+                id="results-heading"
+                ref={resultsHeadingRef}
+                tabIndex={-1}
+                className="scroll-mt-4 rounded text-xl font-bold text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+              >
+                Results
+              </h2>
+              <p className="text-sm text-slate-600">
+                {sourceLabel(snapshot.source)}
+                {snapshot.scenario ? ` (proposed threshold: ${snapshot.scenario.thresholdHours} hours)` : ""}, executed
+                against the legacy function.
+              </p>
+            </div>
             {loading && (
               <p className="flex items-center gap-2 text-xs text-slate-500">
                 <Loader2 className="size-3.5 animate-spin" /> Running new tests. The results below are from the previous
                 run until the new results arrive.
-              </p>
-            )}
-            {expectations && (
-              <p
-                className={`rounded-lg border p-3 text-sm ${
-                  snapshot.source === "ai"
-                    ? "border-violet-300 bg-violet-50 text-violet-900"
-                    : "border-slate-200 bg-white text-slate-700"
-                }`}
-              >
-                <span className="font-semibold">Expected outcomes:</span> {expectations.description} Actual outcomes
-                come from executing the legacy function.
               </p>
             )}
             {divergence?.isStale && (
@@ -417,13 +486,19 @@ export function Dashboard() {
                 </p>
               </div>
             )}
-            {verdict && <VerdictBanner verdict={verdict} />}
+            {verdictToShow && <VerdictBanner verdict={verdictToShow} />}
             <SummaryBar summary={snapshot.summary} />
-            {isScenarioNoRegression(snapshot) && snapshot.scenario && (
-              <div className="flex gap-2 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900" role="status">
-                <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
-                <p className="font-semibold">{noRegressionMessage(snapshot.scenario.thresholdHours)}</p>
-              </div>
+            {expectations && (
+              <p
+                className={`rounded-lg border p-3 text-sm ${
+                  snapshot.source === "ai"
+                    ? "border-violet-300 bg-violet-50 text-violet-900"
+                    : "border-slate-200 bg-white text-slate-700"
+                }`}
+              >
+                <span className="font-semibold">Expected outcomes:</span> {expectations.description} Actual outcomes
+                come from executing the legacy function.
+              </p>
             )}
             <FailureExplanation failures={failures} />
             <ul className="grid gap-3">
@@ -436,7 +511,7 @@ export function Dashboard() {
               <button
                 onClick={() => setShowEvidence((v) => !v)}
                 aria-expanded={showEvidence}
-                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-5 py-2.5 font-semibold text-white shadow hover:bg-slate-800"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 font-semibold text-slate-900 shadow-sm hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 sm:w-auto"
               >
                 <FileText className="size-4" />
                 {showEvidence ? "Hide Evidence Report" : "View Evidence Report"}
@@ -449,6 +524,3 @@ export function Dashboard() {
     </div>
   );
 }
-
-
-

@@ -3,7 +3,7 @@ import { runRegressionCases } from "@/lib/regression/executor";
 import { NEW_REQUIREMENT, OLD_REQUIREMENT, SEED_CASES } from "@/lib/regression/seed";
 import type { RegressionCase } from "@/lib/regression/types";
 import { createEvidenceSnapshot, type EvidenceSnapshot, type SnapshotInput } from "@/lib/report/evidence";
-import { describeVerdict, shouldNavigateToResults } from "@/lib/report/verdict";
+import { describeVerdict, shouldNavigateToResults, verdictForDisplay } from "@/lib/report/verdict";
 import { scenarioCases } from "@/lib/scenario/boundary";
 
 function snapshot(
@@ -138,5 +138,26 @@ describe("shouldNavigateToResults", () => {
     expect(shouldNavigateToResults(a, a)).toBe(false);
     expect(shouldNavigateToResults(a, null)).toBe(false);
     expect(shouldNavigateToResults(null, null)).toBe(false);
+  });
+});
+
+describe("verdictForDisplay: no duplicate success banner", () => {
+  it("passing scenario run: one green verdict carrying the threshold-specific message", () => {
+    const v = verdictForDisplay(snapshot("scenario", scenarioCases(24), { scenario: { thresholdHours: 24 } }));
+    expect(v.tone).toBe("pass");
+    expect(v.title).toBe("All tests passed");
+    expect(v.detail).toBe("0 of 5 test cases failed");
+    expect(v.note).toBe(
+      "No regression detected for a 24-hour threshold: the legacy function matched every expected outcome.",
+    );
+  });
+
+  it("failing scenario, seeded and Gemini runs are unchanged", () => {
+    const scenario = snapshot("scenario", scenarioCases(2), { scenario: { thresholdHours: 2 } });
+    expect(verdictForDisplay(scenario)).toEqual(describeVerdict(scenario));
+    const seeded = snapshot("seeded", SEED_CASES);
+    expect(verdictForDisplay(seeded)).toEqual(describeVerdict(seeded));
+    const passingSeeded = snapshot("seeded", [{ hoursBeforeStart: 1, expectedAllowed: false }]);
+    expect(verdictForDisplay(passingSeeded).note).toBeNull();
   });
 });
