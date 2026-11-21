@@ -1,7 +1,13 @@
 import { LEGACY_CANCELLATION_THRESHOLD_HOURS } from "@/lib/legacy/cancellation";
 import type { CaseResult, RegressionCase, RunReport, RunSummary } from "@/lib/regression/types";
+import { describeProposedRule, scenarioCases } from "@/lib/scenario/boundary";
 
-export type EvidenceSource = "seeded" | "ai";
+export type EvidenceSource = "seeded" | "ai" | "scenario";
+
+/** The numeric rule chosen in the scenario editor. It defines expectations only, never actual results. */
+export interface ScenarioContext {
+  thresholdHours: number;
+}
 
 /** Display-only context from Gemini. Never used to decide pass/fail. */
 export interface AiContext {
@@ -20,6 +26,7 @@ export interface EvidenceSnapshot {
   readonly summary: Readonly<RunSummary>;
   readonly results: readonly Readonly<CaseResult>[];
   readonly aiContext?: Readonly<AiContext>;
+  readonly scenario?: Readonly<ScenarioContext>;
 }
 
 export interface SnapshotInput {
@@ -32,6 +39,7 @@ export interface SnapshotInput {
   /** The executor's response for those cases. */
   report: RunReport;
   aiContext?: AiContext;
+  scenario?: ScenarioContext;
 }
 
 export class EvidenceIntegrityError extends Error {
@@ -74,11 +82,33 @@ function assertConsistent(cases: readonly RegressionCase[], report: RunReport): 
   }
 }
 
+/** Scenario evidence must contain exactly the boundary cases generated for its threshold. */
+function assertScenarioCases(cases: readonly RegressionCase[], scenario: ScenarioContext): void {
+  let expected: RegressionCase[];
+  try {
+    expected = scenarioCases(scenario.thresholdHours);
+  } catch {
+    throw new EvidenceIntegrityError("Scenario threshold is invalid.");
+  }
+  if (!sameCases(cases, expected)) {
+    throw new EvidenceIntegrityError("Scenario cases do not match the boundary cases for the chosen threshold.");
+  }
+}
+
 /** Builds a deep-copied, deep-frozen snapshot. Later edits to inputs cannot change it. */
 export function createEvidenceSnapshot(input: SnapshotInput): EvidenceSnapshot {
   assertConsistent(input.cases, input.report);
+  if (input.aiContext && input.source !== "ai") {
+    throw new EvidenceIntegrityError("Gemini context is only allowed on Gemini-generated evidence.");
+  }
   if (input.aiContext && input.aiContext.reasons.length !== input.cases.length) {
     throw new EvidenceIntegrityError("AI reasons must align with the submitted cases.");
+  }
+  if (input.source === "scenario") {
+    if (!input.scenario) throw new EvidenceIntegrityError("Scenario evidence requires a threshold.");
+    assertScenarioCases(input.cases, input.scenario);
+  } else if (input.scenario) {
+    throw new EvidenceIntegrityError("A scenario threshold is only allowed on scenario evidence.");
   }
   const snapshot: EvidenceSnapshot = structuredClone({
     executedAt: input.executedAt.toISOString(),
@@ -89,6 +119,7 @@ export function createEvidenceSnapshot(input: SnapshotInput): EvidenceSnapshot {
     summary: input.report.summary,
     results: input.report.results,
     ...(input.aiContext ? { aiContext: input.aiContext } : {}),
+    ...(input.scenario ? { scenario: { thresholdHours: input.scenario.thresholdHours } } : {}),
   });
   return deepFreeze(snapshot);
 }
@@ -110,6 +141,16 @@ export function explainMismatch(result: CaseResult): string {
   );
 }
 
+/**
+ * Which way the legacy function disagrees with the expectation. Direction-neutral wording
+ * that never names a particular requirement threshold.
+ */
+export function explainDirection(result: CaseResult): string {
+  return result.expectedAllowed && !result.actualAllowed
+    ? "The legacy rule is stricter here: it blocks a cancellation the test expects to be allowed."
+    : "The legacy rule is more permissive here: it allows a cancellation the test expects to be blocked.";
+}
+
 export const failedResults = (s: EvidenceSnapshot) => s.results.filter((r) => r.status === "fail");
 export const passedResults = (s: EvidenceSnapshot) => s.results.filter((r) => r.status === "pass");
 
@@ -118,11 +159,17 @@ export interface DraftState {
   newRequirement: string;
   /** Executable fields of the currently displayed AI-generated cases, or null if none. */
   generatedCases: readonly RegressionCase[] | null;
+  /** Current scenario-editor threshold, or null if the input is invalid. Only used for scenario evidence. */
+  scenarioThreshold?: number | null;
 }
 
 export interface DraftDivergence {
   requirementsChanged: boolean;
-  /** Only meaningful for AI-sourced evidence; seeded cases are a fixed constant. */
+  /**
+   * AI evidence: the generated cases changed or were cleared.
+   * Scenario evidence: the threshold changed or is invalid, so its cases would differ.
+   * Always false for seeded evidence, whose cases are a fixed constant.
+   */
   casesChanged: boolean;
   isStale: boolean;
 }
@@ -135,13 +182,28 @@ const sameCases = (a: readonly RegressionCase[], b: readonly RegressionCase[]) =
 export function compareWithDraft(snapshot: EvidenceSnapshot, draft: DraftState): DraftDivergence {
   const requirementsChanged =
     draft.oldRequirement !== snapshot.oldRequirement || draft.newRequirement !== snapshot.newRequirement;
-  const casesChanged =
-    snapshot.source === "ai" && (draft.generatedCases === null || !sameCases(draft.generatedCases, snapshot.cases));
+  let casesChanged = false;
+  if (snapshot.source === "ai") {
+    casesChanged = draft.generatedCases === null || !sameCases(draft.generatedCases, snapshot.cases);
+  } else if (snapshot.source === "scenario") {
+    casesChanged = draft.scenarioThreshold !== snapshot.scenario?.thresholdHours;
+  }
   return { requirementsChanged, casesChanged, isStale: requirementsChanged || casesChanged };
 }
 
-export const sourceLabel = (source: EvidenceSource) =>
-  source === "ai" ? "Gemini-generated cases" : "Seeded demo cases";
+const SOURCE_LABELS: Record<EvidenceSource, string> = {
+  seeded: "Seeded demo cases",
+  ai: "Gemini-generated cases",
+  scenario: "Scenario editor (deterministic boundary cases)",
+};
+
+export const sourceLabel = (source: EvidenceSource) => SOURCE_LABELS[source];
+
+/** True when a scenario run found no mismatches. */
+export const isScenarioNoRegression = (s: EvidenceSnapshot) => s.source === "scenario" && s.summary.failed === 0;
+
+export const noRegressionMessage = (thresholdHours: number) =>
+  `No regression detected for a ${thresholdHours}-hour threshold: the legacy function matched every expected outcome.`;
 
 /** Escapes text for a single Markdown table cell. */
 function cell(text: string): string {
@@ -183,6 +245,19 @@ export function toMarkdown(snapshot: EvidenceSnapshot): string {
     "",
   ];
 
+  if (snapshot.scenario) {
+    const t = snapshot.scenario.thresholdHours;
+    lines.push(
+      "## Proposed scenario rule (determines expected outcomes)",
+      "",
+      `- **Threshold:** ${t} hours`,
+      `- **Rule:** ${describeProposedRule(t)}`,
+      "",
+      "Expected outcomes come from this numeric rule, set in the scenario editor. The written requirements above are recorded for context only and were not interpreted.",
+      "",
+    );
+  }
+
   if (snapshot.aiContext) {
     lines.push(
       "## Gemini change summary (context only, not evidence)",
@@ -194,7 +269,7 @@ export function toMarkdown(snapshot: EvidenceSnapshot): string {
 
   lines.push(`## Failed cases (${failed.length})`, "");
   if (failed.length === 0) {
-    lines.push("No failures.", "");
+    lines.push(snapshot.scenario ? noRegressionMessage(snapshot.scenario.thresholdHours) : "No failures.", "");
   } else {
     for (const r of failed) {
       lines.push(

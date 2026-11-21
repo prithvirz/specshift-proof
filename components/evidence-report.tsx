@@ -3,9 +3,12 @@
 import { useState } from "react";
 import { Check, ChevronDown, ClipboardCopy, FileText, XCircle } from "lucide-react";
 import { LEGACY_CANCELLATION_THRESHOLD_HOURS } from "@/lib/legacy/cancellation";
+import { describeProposedRule } from "@/lib/scenario/boundary";
 import {
   describeBehavior,
+  explainDirection,
   explainMismatch,
+  noRegressionMessage,
   failedResults,
   passedResults,
   sourceLabel,
@@ -46,8 +49,9 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
     setTimeout(() => setCopy("idle"), 2500);
   }
 
-  const meta = [
+  const meta: Array<{ label: string; value: string; title?: string }> = [
     { label: "Test source", value: sourceLabel(snapshot.source) },
+    ...(snapshot.scenario ? [{ label: "Proposed threshold", value: `${snapshot.scenario.thresholdHours} hours` }] : []),
     { label: "Executed at", value: formatTimestamp(snapshot.executedAt), title: snapshot.executedAt },
     { label: "Total", value: String(snapshot.summary.total) },
     { label: "Passed", value: String(snapshot.summary.passed) },
@@ -81,7 +85,7 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
         </p>
       )}
 
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <dl className={`grid grid-cols-2 gap-3 ${meta.length > 5 ? "sm:grid-cols-6" : "sm:grid-cols-5"}`}>
         {meta.map((m) => (
           <div key={m.label} className="rounded-lg bg-slate-50 p-3">
             <dt className="text-xs text-slate-500">{m.label}</dt>
@@ -93,11 +97,22 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
       </dl>
 
       <section className="space-y-3">
-        <h4 className="font-semibold text-slate-900">Requirements captured at execution time</h4>
+        <h4 className="font-semibold text-slate-900">Written requirements captured at execution time</h4>
         <div className="grid gap-3 md:grid-cols-2">
           <RequirementBlock label="Old requirement" text={snapshot.oldRequirement} />
           <RequirementBlock label="New requirement" text={snapshot.newRequirement} />
         </div>
+        {snapshot.scenario && (
+          <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
+            <p className="font-semibold">Proposed scenario rule (determines expected outcomes)</p>
+            <p className="mt-1">
+              <code>{describeProposedRule(snapshot.scenario.thresholdHours)}</code>, set in the scenario editor.
+            </p>
+            <p className="mt-1 text-xs">
+              The written requirements above are recorded for context only and were not interpreted.
+            </p>
+          </div>
+        )}
         {snapshot.aiContext && (
           <p className="rounded-lg bg-violet-50 p-3 text-sm text-violet-900">
             <span className="font-semibold">Gemini change summary (context only, not evidence):</span>{" "}
@@ -109,7 +124,9 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
       <section className="space-y-3">
         <h4 className="font-semibold text-slate-900">Failed cases ({failed.length})</h4>
         {failed.length === 0 ? (
-          <p className="text-sm text-slate-600">No failures.</p>
+          <p className={snapshot.scenario ? "text-sm font-semibold text-emerald-700" : "text-sm text-slate-600"}>
+            {snapshot.scenario ? noRegressionMessage(snapshot.scenario.thresholdHours) : "No failures."}
+          </p>
         ) : (
           <ul className="space-y-3">
             {failed.map((r) => (
@@ -131,7 +148,9 @@ export function EvidenceReport({ snapshot, isStale }: { snapshot: EvidenceSnapsh
                     <dd>{describeBehavior(r.actualAllowed)}</dd>
                   </div>
                 </dl>
-                <p className="mt-2 text-sm text-slate-800">{explainMismatch(r)}</p>
+                <p className="mt-2 text-sm text-slate-800">
+                  {explainMismatch(r)} {explainDirection(r)}
+                </p>
                 {reasonFor(r.id) && (
                   <p className="mt-1 text-xs text-slate-500">Gemini&apos;s rationale for this case: {reasonFor(r.id)}</p>
                 )}

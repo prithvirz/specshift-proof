@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles, FileText, History } from "lucide-react";
+import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles, FileText, History, CheckCircle2 } from "lucide-react";
+import { ScenarioEditor } from "@/components/scenario-editor";
 import { EvidenceReport } from "@/components/evidence-report";
 import { GeneratedPreview } from "@/components/generated-preview";
 import { FailureExplanation } from "@/components/failure-explanation";
@@ -13,10 +14,27 @@ import type { RegressionCase, RunReport } from "@/lib/regression/types";
 import {
   compareWithDraft,
   createEvidenceSnapshot,
+  isScenarioNoRegression,
+  noRegressionMessage,
+  sourceLabel,
   type AiContext,
   type EvidenceSnapshot,
   type EvidenceSource,
+  type ScenarioContext,
 } from "@/lib/report/evidence";
+import {
+  DEFAULT_SCENARIO_THRESHOLD,
+  generateBoundaryCases,
+  scenarioThresholdSchema,
+} from "@/lib/scenario/boundary";
+
+function parseThreshold(raw: string): { value: number | null; error: string | null } {
+  if (raw.trim() === "") return { value: null, error: "Enter a number of hours." };
+  const parsed = scenarioThresholdSchema.safeParse(Number(raw));
+  return parsed.success
+    ? { value: parsed.data, error: null }
+    : { value: null, error: parsed.error.issues[0]?.message ?? "Invalid threshold." };
+}
 
 async function readError(res: Response): Promise<string> {
   const data: unknown = await res.json().catch(() => null);
@@ -37,8 +55,18 @@ export function Dashboard() {
   const [generated, setGenerated] = useState<GeneratedTests | null>(null);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  const [rawThreshold, setRawThreshold] = useState(String(DEFAULT_SCENARIO_THRESHOLD));
+  const threshold = useMemo(() => parseThreshold(rawThreshold), [rawThreshold]);
+  const boundaryCases = useMemo(
+    () => (threshold.value === null ? [] : generateBoundaryCases(threshold.value)),
+    [threshold.value],
+  );
 
-  async function run(cases: readonly RegressionCase[], from: EvidenceSource, aiContext?: AiContext) {
+  async function run(
+    cases: readonly RegressionCase[],
+    from: EvidenceSource,
+    context: { aiContext?: AiContext; scenario?: ScenarioContext } = {},
+  ) {
     // Capture the draft at click time so later edits cannot leak into this run's evidence.
     const captured = { oldRequirement: oldReq, newRequirement: newReq, cases: cases.map((c) => ({ ...c })) };
     setLoading(true);
@@ -60,7 +88,8 @@ export function Dashboard() {
           newRequirement: captured.newRequirement,
           cases: captured.cases,
           report,
-          aiContext,
+          aiContext: context.aiContext,
+          scenario: context.scenario,
         }),
       );
     } catch (e) {
@@ -98,9 +127,25 @@ export function Dashboard() {
       generated.testCases.map(({ hoursBeforeStart, expectedAllowed }) => ({ hoursBeforeStart, expectedAllowed })),
       "ai",
       {
-        changeSummary: generated.changeSummary,
-        reasons: generated.testCases.map((c) => c.reason),
+        aiContext: {
+          changeSummary: generated.changeSummary,
+          reasons: generated.testCases.map((c) => c.reason),
+        },
       },
+    );
+  }
+
+  function runScenario() {
+    if (threshold.value === null) return;
+    const thresholdHours = threshold.value;
+    // Send only the executable fields; `notes` are display-only.
+    void run(
+      generateBoundaryCases(thresholdHours).map(({ hoursBeforeStart, expectedAllowed }) => ({
+        hoursBeforeStart,
+        expectedAllowed,
+      })),
+      "scenario",
+      { scenario: { thresholdHours } },
     );
   }
 
@@ -113,9 +158,10 @@ export function Dashboard() {
             generatedCases: generated
               ? generated.testCases.map(({ hoursBeforeStart, expectedAllowed }) => ({ hoursBeforeStart, expectedAllowed }))
               : null,
+            scenarioThreshold: threshold.value,
           })
         : null,
-    [snapshot, oldReq, newReq, generated],
+    [snapshot, oldReq, newReq, generated, threshold.value],
   );
   const failures = snapshot?.results.filter((r) => r.status === "fail") ?? [];
   const areaClass =
@@ -200,6 +246,17 @@ export function Dashboard() {
           </div>
         )}
 
+        <ScenarioEditor
+          rawThreshold={rawThreshold}
+          onThresholdChange={setRawThreshold}
+          threshold={threshold.value}
+          validationError={threshold.error}
+          cases={boundaryCases}
+          onRun={runScenario}
+          disabled={loading || generating}
+          running={runningFrom === "scenario"}
+        />
+
         {error && (
           <div role="alert" className="flex gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
@@ -210,8 +267,9 @@ export function Dashboard() {
         {snapshot && (
           <section className="space-y-4" aria-live="polite">
             <p className="text-sm font-semibold text-slate-700">
-              Results for {snapshot.source === "ai" ? "AI-generated cases" : "seeded demo cases"} (executed by the
-              legacy function)
+              Results for {sourceLabel(snapshot.source)}
+              {snapshot.scenario ? ` (proposed threshold: ${snapshot.scenario.thresholdHours} hours)` : ""}, executed by
+              the legacy function
             </p>
             {divergence?.isStale && (
               <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
@@ -220,7 +278,10 @@ export function Dashboard() {
                   <strong>Previous execution evidence.</strong>{" "}
                   {[
                     divergence.requirementsChanged && "The requirement text has been edited",
-                    divergence.casesChanged && "the generated cases have changed",
+                    divergence.casesChanged &&
+                      (snapshot.source === "scenario"
+                        ? "the scenario threshold has changed"
+                        : "the generated cases have changed"),
                   ]
                     .filter(Boolean)
                     .join(" and ")}{" "}
@@ -230,6 +291,12 @@ export function Dashboard() {
               </div>
             )}
             <SummaryBar summary={snapshot.summary} />
+            {isScenarioNoRegression(snapshot) && snapshot.scenario && (
+              <div className="flex gap-2 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900" role="status">
+                <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+                <p className="font-semibold">{noRegressionMessage(snapshot.scenario.thresholdHours)}</p>
+              </div>
+            )}
             <FailureExplanation failures={failures} />
             <ul className="grid gap-3">
               {snapshot.results.map((r) => (

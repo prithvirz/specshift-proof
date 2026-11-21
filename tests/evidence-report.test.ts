@@ -8,10 +8,13 @@ import {
   createEvidenceSnapshot,
   explainMismatch,
   failedResults,
+  isScenarioNoRegression,
   passedResults,
+  sourceLabel,
   toMarkdown,
   type SnapshotInput,
 } from "@/lib/report/evidence";
+import { scenarioCases } from "@/lib/scenario/boundary";
 
 const EXECUTED_AT = new Date("2026-11-21T12:00:00.000Z");
 
@@ -255,5 +258,152 @@ describe("toMarkdown", () => {
   it("is deterministic", () => {
     const s = createEvidenceSnapshot(aiInput());
     expect(toMarkdown(s)).toBe(toMarkdown(s));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario-editor evidence
+// ---------------------------------------------------------------------------
+
+function scenarioInput(thresholdHours: number, overrides: Partial<SnapshotInput> = {}): SnapshotInput {
+  const cases = scenarioCases(thresholdHours);
+  return {
+    executedAt: EXECUTED_AT,
+    source: "scenario",
+    oldRequirement: OLD_REQUIREMENT,
+    newRequirement: NEW_REQUIREMENT,
+    cases,
+    report: runRegressionCases(cases),
+    scenario: { thresholdHours },
+    ...overrides,
+  };
+}
+
+describe("scenario evidence snapshots", () => {
+  it("records the threshold, source and executor results", () => {
+    const s = createEvidenceSnapshot(scenarioInput(2));
+    expect(s.source).toBe("scenario");
+    expect(s.scenario).toEqual({ thresholdHours: 2 });
+    expect(s.aiContext).toBeUndefined();
+    expect(s.summary).toEqual({ total: 7, passed: 4, failed: 3 });
+    expect(Object.isFrozen(s.scenario)).toBe(true);
+    expect(sourceLabel(s.source)).toBe("Scenario editor (deterministic boundary cases)");
+  });
+
+  it("is unaffected by later mutation of the scenario input", () => {
+    const input = scenarioInput(6);
+    const s = createEvidenceSnapshot(input);
+    input.scenario!.thresholdHours = 12;
+    expect(s.scenario?.thresholdHours).toBe(6);
+  });
+
+  it("rejects cases that do not match the chosen threshold", () => {
+    const cases = scenarioCases(6);
+    expect(() =>
+      createEvidenceSnapshot(scenarioInput(2, { cases, report: runRegressionCases(cases) })),
+    ).toThrow(EvidenceIntegrityError);
+
+    const edited = scenarioCases(2).map((c, i) => (i === 2 ? { ...c, expectedAllowed: false } : c));
+    expect(() =>
+      createEvidenceSnapshot(scenarioInput(2, { cases: edited, report: runRegressionCases(edited) })),
+    ).toThrow(EvidenceIntegrityError);
+
+    const missing = scenarioCases(2).slice(1);
+    expect(() =>
+      createEvidenceSnapshot(scenarioInput(2, { cases: missing, report: runRegressionCases(missing) })),
+    ).toThrow(EvidenceIntegrityError);
+  });
+
+  it("rejects invalid or missing scenario thresholds", () => {
+    expect(() => createEvidenceSnapshot(scenarioInput(2, { scenario: undefined }))).toThrow(EvidenceIntegrityError);
+    expect(() => createEvidenceSnapshot(scenarioInput(2, { scenario: { thresholdHours: 2.5 } }))).toThrow(
+      EvidenceIntegrityError,
+    );
+    expect(() => createEvidenceSnapshot(scenarioInput(2, { scenario: { thresholdHours: 169 } }))).toThrow(
+      EvidenceIntegrityError,
+    );
+  });
+
+  it("keeps sources separate", () => {
+    expect(() => createEvidenceSnapshot(seededInput({ scenario: { thresholdHours: 2 } }))).toThrow(
+      EvidenceIntegrityError,
+    );
+    expect(() =>
+      createEvidenceSnapshot(scenarioInput(2, { aiContext: { changeSummary: "x", reasons: Array(7).fill("r") } })),
+    ).toThrow(EvidenceIntegrityError);
+  });
+});
+
+describe("scenario staleness", () => {
+  const base = { oldRequirement: OLD_REQUIREMENT, newRequirement: NEW_REQUIREMENT, generatedCases: null };
+
+  it("is current when the threshold and text are unchanged", () => {
+    expect(compareWithDraft(createEvidenceSnapshot(scenarioInput(2)), { ...base, scenarioThreshold: 2 }).isStale).toBe(
+      false,
+    );
+  });
+
+  it("is stale when the threshold changes or becomes invalid", () => {
+    const s = createEvidenceSnapshot(scenarioInput(2));
+    expect(compareWithDraft(s, { ...base, scenarioThreshold: 3 })).toMatchObject({ casesChanged: true, isStale: true });
+    expect(compareWithDraft(s, { ...base, scenarioThreshold: null }).isStale).toBe(true);
+  });
+
+  it("is stale when the requirement text changes", () => {
+    const s = createEvidenceSnapshot(scenarioInput(2));
+    expect(compareWithDraft(s, { ...base, newRequirement: "edited", scenarioThreshold: 2 })).toMatchObject({
+      requirementsChanged: true,
+      casesChanged: false,
+      isStale: true,
+    });
+  });
+
+  it("ignores AI cases for scenario evidence, and the threshold for other sources", () => {
+    const scenario = createEvidenceSnapshot(scenarioInput(2));
+    expect(compareWithDraft(scenario, { ...base, generatedCases: aiCases, scenarioThreshold: 2 }).isStale).toBe(false);
+    const seeded = createEvidenceSnapshot(seededInput());
+    expect(compareWithDraft(seeded, { ...base, scenarioThreshold: 99 }).isStale).toBe(false);
+    const ai = createEvidenceSnapshot(aiInput());
+    expect(compareWithDraft(ai, { ...base, generatedCases: aiCases, scenarioThreshold: 99 }).isStale).toBe(false);
+  });
+});
+
+describe("scenario Markdown", () => {
+  it("separates the proposed rule from the written requirements", () => {
+    const md = toMarkdown(createEvidenceSnapshot(scenarioInput(6)));
+    expect(md).toContain("- **Test source:** Scenario editor (deterministic boundary cases)");
+    expect(md).toContain(
+      [
+        "## Proposed scenario rule (determines expected outcomes)",
+        "",
+        "- **Threshold:** 6 hours",
+        "- **Rule:** Cancellation allowed if hoursBeforeStart >= 6",
+        "",
+        "Expected outcomes come from this numeric rule, set in the scenario editor. The written requirements above are recorded for context only and were not interpreted.",
+      ].join("\n"),
+    );
+    expect(md.indexOf("## Requirements at execution time")).toBeLessThan(md.indexOf("## Proposed scenario rule"));
+    expect(md).not.toContain("Gemini");
+  });
+
+  it("states no regression when every scenario case passes", () => {
+    const s = createEvidenceSnapshot(scenarioInput(24));
+    expect(isScenarioNoRegression(s)).toBe(true);
+    expect(toMarkdown(s)).toContain(
+      "## Failed cases (0)\n\nNo regression detected for a 24-hour threshold: the legacy function matched every expected outcome.",
+    );
+  });
+
+  it("does not claim no regression when cases fail, or for other sources", () => {
+    expect(isScenarioNoRegression(createEvidenceSnapshot(scenarioInput(2)))).toBe(false);
+    const allPass = [{ hoursBeforeStart: 30, expectedAllowed: true }];
+    const seeded = createEvidenceSnapshot(seededInput({ cases: allPass, report: runRegressionCases(allPass) }));
+    expect(isScenarioNoRegression(seeded)).toBe(false);
+    expect(toMarkdown(seeded)).not.toContain("No regression detected");
+  });
+
+  it("does not add scenario sections to seeded or Gemini reports", () => {
+    expect(toMarkdown(createEvidenceSnapshot(seededInput()))).not.toContain("Proposed scenario rule");
+    expect(toMarkdown(createEvidenceSnapshot(aiInput()))).not.toContain("Proposed scenario rule");
   });
 });
