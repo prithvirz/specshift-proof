@@ -15,6 +15,7 @@ vi.mock("@google/genai", () => ({
 import { POST } from "@/app/api/generate-tests/route";
 
 const SECRET = "test-secret-key-12345";
+const ACCESS_CODE = "route-test-access-code-0001";
 const body = {
   oldRequirement: "Cancel if at least 24 hours remain.",
   newRequirement: "Cancel if at least 2 hours remain.",
@@ -33,7 +34,7 @@ function call(payload: unknown, raw = false) {
   return POST(
     new Request("http://localhost/api/generate-tests", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-demo-access-code": ACCESS_CODE },
       body: raw ? (payload as string) : JSON.stringify(payload),
     }),
   );
@@ -44,6 +45,9 @@ beforeEach(() => {
   constructed.mockReset();
   vi.stubEnv("GEMINI_API_KEY", SECRET);
   vi.stubEnv("GEMINI_MODEL", "");
+  // AI enabled with a valid access code: these tests cover behavior after the access gate.
+  vi.stubEnv("AI_GENERATION_ENABLED", "true");
+  vi.stubEnv("DEMO_ACCESS_CODE", ACCESS_CODE);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 

@@ -35,11 +35,15 @@ npm install
 npm run dev      # http://localhost:3000
 ```
 
-The seeded demo works without any configuration. AI generation needs a Gemini API key:
+The seeded demo and the scenario editor work without any configuration. AI generation is off by default. To turn it on locally:
 
 ```bash
 cp .env.example .env.local    # Windows PowerShell: Copy-Item .env.example .env.local
-# then set GEMINI_API_KEY in .env.local and restart the dev server
+# In .env.local set:
+#   GEMINI_API_KEY=<your key>
+#   AI_GENERATION_ENABLED=true
+#   DEMO_ACCESS_CODE=<at least 16 characters>
+# then restart the dev server and enter the same code in the dashboard.
 ```
 
 Other scripts: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, `npm start`.
@@ -50,13 +54,15 @@ Other scripts: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`,
 |---|---|---|---|
 | `GEMINI_API_KEY` | Only for AI generation | none | Gemini API key. Read on the server only. |
 | `GEMINI_MODEL` | No | `gemini-3.5-flash-lite` | Gemini model used for test generation. |
+| `AI_GENERATION_ENABLED` | No | off | AI generation runs only when this is exactly `true`. |
+| `DEMO_ACCESS_CODE` | When AI is enabled | none | Shared code required in the `x-demo-access-code` header. At least 16 characters, in every environment. If AI is enabled and this is missing or too short, AI requests fail closed. |
 
 `.env.local` is ignored by Git. Never commit a real key. Next.js reads `.env.local` at startup, so restart the server after changing it.
 
 ## Using the dashboard
 
 1. **Seeded demo:** click **Run Regression Tests** to execute the three seeded cases.
-2. **AI generation:** click **Generate Tests with AI**. Gemini reads both requirements and returns a change summary plus 5 to 8 proposed cases, each with a reason. Review them, then click **Run Generated Tests**. The generated cases are bound to the exact requirement text sent to Gemini. If you edit either requirement afterward, **Run Generated Tests** is disabled until you regenerate. If a regeneration fails, the previous cases stay unchanged and the error says so.
+2. **AI generation:** enter the demo access code, then click **Generate Tests with AI**. The code is kept in page memory only. It is not saved, put in the URL, or included in evidence reports. Gemini reads both requirements and returns a change summary plus 5 to 8 proposed cases, each with a reason. Review them, then click **Run Generated Tests**. The generated cases are bound to the exact requirement text sent to Gemini. If you edit either requirement afterward, **Run Generated Tests** is disabled until you regenerate. If a regeneration fails, the previous cases stay unchanged and the error says so.
 3. **Scenario editor:** enter a proposed threshold *T* (whole hours, 0 to 168, default 2), review the generated boundary cases, then click **Run Scenario Tests**.
 4. **Evidence report:** after any run, click **View Evidence Report** below the results.
 
@@ -112,10 +118,29 @@ Both strings must be nonempty, with at most 3000 characters. The response is `{ 
 | 400 | `invalid_json`, `invalid_input` | Bad request body |
 | 502 | `invalid_model_output` | Gemini returned invalid output |
 | 502 | `provider_error` | Gemini request failed |
+| 401 | `access_code_required`, `access_code_invalid` | Missing or wrong demo access code |
+| 413 | `payload_too_large` | Request body over 64 KB |
+| 503 | `ai_disabled` | `AI_GENERATION_ENABLED` is not `true` |
+| 503 | `ai_misconfigured` | AI is enabled but `DEMO_ACCESS_CODE` is missing or shorter than 16 characters |
 | 503 | `missing_api_key` | `GEMINI_API_KEY` is not set |
 | 504 | `provider_timeout` | Gemini timed out |
 
 **Retries:** transient Gemini errors (HTTP 429, 500, 502, 503, 504, or an attempt timing out) are retried on the server. There are at most 2 retries, with exponential backoff (500 ms × 2ⁿ plus up to 250 ms of jitter). Each attempt is capped at 15 s, and the whole request has a 30 s deadline. Invalid input, a missing key, malformed output, and other errors are not retried. Raw provider errors and keys are never sent to the browser or written to logs.
+
+**Access control:** before the body is read or Gemini is called, the route checks that AI is enabled and that the `x-demo-access-code` header matches `DEMO_ACCESS_CODE`. The comparison uses SHA-256 digests and a constant-time check. The configured and submitted codes are never returned or logged. Bodies over 64 KB are rejected while they are read, whether or not `Content-Length` is set. A 429 may come from the hosting firewall without a JSON body. The dashboard shows a clear message for that, and for network failures.
+
+`/api/run-tests` needs no code, so the seeded demo and scenario editor always work.
+
+## Deploying a public demo
+
+The access code limits who can use Gemini. It does not stop distributed abuse by someone who has the code, and the app has no rate limiter of its own. An in-memory limiter would not work on serverless hosts, because each instance keeps separate counters. Use these layers together:
+
+1. **Use a fresh, dedicated Gemini key.** Create it in its own Google project, and never reuse a key that has been shared. Stay on the free tier, or if billing is enabled, set a project spend cap in AI Studio. Caps can lag by about 10 minutes.
+2. **Set environment variables on the host, for Production only:** `GEMINI_API_KEY` (marked sensitive), `AI_GENERATION_ENABLED=true` only while AI should be available, and a random `DEMO_ACCESS_CODE` of at least 16 characters. Preview deployments then have AI disabled.
+3. **Add a platform rate limit.** For example, on Vercel add a WAF rate-limit rule for `POST /api/generate-tests`, keyed by IP. Do not rely on client-supplied IP headers in app code.
+4. **Check the function duration limit.** A generation request can take up to about 30 seconds with retries.
+5. **Verify after deploying:** AI returns 401 without the code and works with it, and the seeded demo and scenario editor work in a private window.
+6. **Afterwards:** unset `AI_GENERATION_ENABLED` and revoke the key. Rotate the access code if it leaks.
 
 ## Structure
 
@@ -136,4 +161,4 @@ Both strings must be nonempty, with at most 3000 characters. The response is `{ 
 - The scenario editor supports one rule shape (`hoursBeforeStart >= T`) with whole-hour thresholds from 0 to 168 and no fractional boundary cases. Its expected outcomes are only as correct as the threshold you choose.
 - Evidence reports live in browser memory. Only the latest run is kept, and it disappears on reload. Export is Markdown via the clipboard only.
 - The execution timestamp comes from the browser clock.
-- No authentication, database, cloud storage, PDF export, or deployment.
+- No user accounts, database, cloud storage, or PDF export. AI access uses one shared code, not per-user authentication, and the app has no rate limiter of its own.

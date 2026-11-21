@@ -1,21 +1,34 @@
 import { NextResponse } from "next/server";
+import { ACCESS_CODE_HEADER, ACCESS_DENIAL_MESSAGES, checkAiAccess } from "@/lib/ai/access";
 import { InvalidModelOutputError, generateTestCases } from "@/lib/ai/generate";
 import { ProviderFailure, createGeminiProvider } from "@/lib/ai/provider";
 import { generateTestsRequestSchema } from "@/lib/ai/schema";
+import { readJsonWithLimit } from "@/lib/http/read-json";
+
+/** Two 3000-character requirements fit comfortably, even with worst-case JSON escaping. */
+const MAX_BODY_BYTES = 64 * 1024;
 
 function errorResponse(code: string, message: string, status: number) {
   return NextResponse.json({ error: message, code }, { status });
 }
 
 export async function POST(request: Request) {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse("invalid_json", "Request body must be valid JSON.", 400);
+  // Access is checked first: no body is read and Gemini is not called for denied requests.
+  const access = checkAiAccess(request.headers.get(ACCESS_CODE_HEADER), process.env);
+  if (!access.ok) {
+    // Log the category only. Never the configured or submitted code.
+    if (access.code === "ai_misconfigured") console.error("[generate-tests] access denied: ai_misconfigured");
+    return errorResponse(access.code, ACCESS_DENIAL_MESSAGES[access.code], access.status);
   }
 
-  const parsed = generateTestsRequestSchema.safeParse(body);
+  const body = await readJsonWithLimit(request, MAX_BODY_BYTES);
+  if (!body.ok) {
+    return body.reason === "too_large"
+      ? errorResponse("payload_too_large", "Request body is too large.", 413)
+      : errorResponse("invalid_json", "Request body must be valid JSON.", 400);
+  }
+
+  const parsed = generateTestsRequestSchema.safeParse(body.value);
   if (!parsed.success) {
     return NextResponse.json(
       {

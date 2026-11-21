@@ -10,6 +10,13 @@ import { ResultCard } from "@/components/result-card";
 import { SummaryBar } from "@/components/summary-bar";
 import { NEW_REQUIREMENT, OLD_REQUIREMENT, SEED_CASES } from "@/lib/regression/seed";
 import type { GeneratedTests } from "@/lib/ai/schema";
+import { ACCESS_CODE_HEADER } from "@/lib/ai/access-header";
+import {
+  NETWORK_ERROR_MESSAGE,
+  describeGenerationFailure,
+  isNetworkError,
+  readFailedResponse,
+} from "@/lib/ai/client-errors";
 import {
   applyGenerationOutcome,
   createGenerationRecord,
@@ -54,6 +61,19 @@ async function readError(res: Response): Promise<string> {
   return `Request failed with status ${res.status}.`;
 }
 
+/** Thrown for failures that already have a user-facing message. */
+class UserFacingError extends Error {}
+
+/** Runs fetch and turns "never reached the server" failures into a clear message. */
+async function fetchOrExplain(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    if (isNetworkError(e)) throw new UserFacingError(NETWORK_ERROR_MESSAGE);
+    throw e;
+  }
+}
+
 export function Dashboard() {
   const [oldReq, setOldReq] = useState(OLD_REQUIREMENT);
   const [newReq, setNewReq] = useState(NEW_REQUIREMENT);
@@ -64,6 +84,8 @@ export function Dashboard() {
   const [runningFrom, setRunningFrom] = useState<EvidenceSource | null>(null);
   const [generation, setGeneration] = useState<GenerationState>(initialGenerationState);
   const [generating, setGenerating] = useState(false);
+  // Held in component memory only: never persisted, put in a URL, or added to evidence.
+  const [accessCode, setAccessCode] = useState("");
   const generated = generation.record;
   const generationIsCurrent = generated
     ? generationMatchesDraft(generated, { oldRequirement: oldReq, newRequirement: newReq })
@@ -88,7 +110,7 @@ export function Dashboard() {
     setRunningFrom(from);
     setError(null);
     try {
-      const res = await fetch("/api/run-tests", {
+      const res = await fetchOrExplain("/api/run-tests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cases }),
@@ -121,12 +143,15 @@ export function Dashboard() {
     const sent: RequirementDraft = { oldRequirement: oldReq, newRequirement: newReq };
     setGenerating(true);
     try {
-      const res = await fetch("/api/generate-tests", {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const code = accessCode.trim();
+      if (code) headers[ACCESS_CODE_HEADER] = code;
+      const res = await fetchOrExplain("/api/generate-tests", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(sent),
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw new UserFacingError(describeGenerationFailure(await readFailedResponse(res)));
       const record = createGenerationRecord(sent, (await res.json()) as GeneratedTests);
       setGeneration((s) => applyGenerationOutcome(s, { ok: true, record }));
     } catch (e) {
@@ -227,9 +252,24 @@ export function Dashboard() {
             {generating ? "Generating..." : "Generate Tests with AI"}
           </button>
         </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="block text-sm font-semibold text-slate-900">
+            Demo access code (for AI generation)
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={accessCode}
+              onChange={(e) => setAccessCode(e.target.value)}
+              placeholder="Required for Generate Tests with AI"
+              className="mt-1 block w-72 max-w-full rounded-lg border border-slate-300 bg-white p-2 text-sm font-normal text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-200"
+            />
+          </label>
+        </div>
         <p className="text-xs text-slate-500">
-          &quot;Run Regression Tests&quot; uses the built-in seeded cases and works without an API key. AI generation
-          needs <code>GEMINI_API_KEY</code> on the server.
+          &quot;Run Regression Tests&quot; and the scenario editor work without an access code or API key. AI generation
+          must be enabled on the server and needs the demo access code. The code is kept in this page only and is not
+          saved.
         </p>
 
         {generation.error && (
