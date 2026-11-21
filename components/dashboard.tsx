@@ -10,6 +10,16 @@ import { ResultCard } from "@/components/result-card";
 import { SummaryBar } from "@/components/summary-bar";
 import { NEW_REQUIREMENT, OLD_REQUIREMENT, SEED_CASES } from "@/lib/regression/seed";
 import type { GeneratedTests } from "@/lib/ai/schema";
+import {
+  applyGenerationOutcome,
+  createGenerationRecord,
+  generatedExecutableCases,
+  generationMatchesDraft,
+  initialGenerationState,
+  prepareGeneratedRun,
+  type GenerationState,
+  type RequirementDraft,
+} from "@/lib/ai/generation-record";
 import type { RegressionCase, RunReport } from "@/lib/regression/types";
 import {
   compareWithDraft,
@@ -52,9 +62,12 @@ export function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runningFrom, setRunningFrom] = useState<EvidenceSource | null>(null);
-  const [generated, setGenerated] = useState<GeneratedTests | null>(null);
+  const [generation, setGeneration] = useState<GenerationState>(initialGenerationState);
   const [generating, setGenerating] = useState(false);
-  const [genError, setGenError] = useState<string | null>(null);
+  const generated = generation.record;
+  const generationIsCurrent = generated
+    ? generationMatchesDraft(generated, { oldRequirement: oldReq, newRequirement: newReq })
+    : false;
   const [rawThreshold, setRawThreshold] = useState(String(DEFAULT_SCENARIO_THRESHOLD));
   const threshold = useMemo(() => parseThreshold(rawThreshold), [rawThreshold]);
   const boundaryCases = useMemo(
@@ -65,10 +78,12 @@ export function Dashboard() {
   async function run(
     cases: readonly RegressionCase[],
     from: EvidenceSource,
-    context: { aiContext?: AiContext; scenario?: ScenarioContext } = {},
+    context: { aiContext?: AiContext; scenario?: ScenarioContext; requirements?: RequirementDraft } = {},
   ) {
-    // Capture the draft at click time so later edits cannot leak into this run's evidence.
-    const captured = { oldRequirement: oldReq, newRequirement: newReq, cases: cases.map((c) => ({ ...c })) };
+    // Capture inputs at click time so later edits cannot leak into this run's evidence.
+    // AI runs pass the requirement text that was used for generation.
+    const requirements = context.requirements ?? { oldRequirement: oldReq, newRequirement: newReq };
+    const captured = { ...requirements, cases: cases.map((c) => ({ ...c })) };
     setLoading(true);
     setRunningFrom(from);
     setError(null);
@@ -102,37 +117,31 @@ export function Dashboard() {
   }
 
   async function generate() {
+    // Capture the exact text sent, so the record matches what Gemini saw even if the user keeps typing.
+    const sent: RequirementDraft = { oldRequirement: oldReq, newRequirement: newReq };
     setGenerating(true);
-    setGenError(null);
-    setGenerated(null);
     try {
       const res = await fetch("/api/generate-tests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ oldRequirement: oldReq, newRequirement: newReq }),
+        body: JSON.stringify(sent),
       });
       if (!res.ok) throw new Error(await readError(res));
-      setGenerated((await res.json()) as GeneratedTests);
+      const record = createGenerationRecord(sent, (await res.json()) as GeneratedTests);
+      setGeneration((s) => applyGenerationOutcome(s, { ok: true, record }));
     } catch (e) {
-      setGenError(e instanceof Error ? e.message : "Unexpected error generating tests.");
+      const message = e instanceof Error ? e.message : "Unexpected error generating tests.";
+      setGeneration((s) => applyGenerationOutcome(s, { ok: false, error: message }));
     } finally {
       setGenerating(false);
     }
   }
 
   function runGenerated() {
-    if (!generated) return;
-    // Send only the executable fields; `reason` is display-only.
-    void run(
-      generated.testCases.map(({ hoursBeforeStart, expectedAllowed }) => ({ hoursBeforeStart, expectedAllowed })),
-      "ai",
-      {
-        aiContext: {
-          changeSummary: generated.changeSummary,
-          reasons: generated.testCases.map((c) => c.reason),
-        },
-      },
-    );
+    if (!generated || !generationIsCurrent) return;
+    // Refuses (throws) if the draft no longer matches the generation inputs.
+    const payload = prepareGeneratedRun(generated, { oldRequirement: oldReq, newRequirement: newReq });
+    void run(payload.cases, "ai", { aiContext: payload.aiContext, requirements: payload.requirements });
   }
 
   function runScenario() {
@@ -155,9 +164,7 @@ export function Dashboard() {
         ? compareWithDraft(snapshot, {
             oldRequirement: oldReq,
             newRequirement: newReq,
-            generatedCases: generated
-              ? generated.testCases.map(({ hoursBeforeStart, expectedAllowed }) => ({ hoursBeforeStart, expectedAllowed }))
-              : null,
+            generatedCases: generated ? generatedExecutableCases(generated) : null,
             scenarioThreshold: threshold.value,
           })
         : null,
@@ -225,19 +232,35 @@ export function Dashboard() {
           needs <code>GEMINI_API_KEY</code> on the server.
         </p>
 
-        {genError && (
+        {generation.error && (
           <div role="alert" className="flex gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <p>{genError}</p>
+            <p>
+              {generation.error}
+              {generation.keptPrevious && (
+                <> No new cases were generated. The cases below are from the previous successful generation.</>
+              )}
+            </p>
           </div>
         )}
 
         {generated && (
           <div className="space-y-3">
-            <GeneratedPreview generated={generated} />
+            <GeneratedPreview generated={generated.output} />
+            {!generationIsCurrent && (
+              <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+                <History className="mt-0.5 size-4 shrink-0" />
+                <p>
+                  <strong>These cases are out of date.</strong> The requirement text has been edited since these cases
+                  were generated, so they may not match it. Click &quot;Generate Tests with AI&quot; to regenerate
+                  before running.
+                </p>
+              </div>
+            )}
             <button
               onClick={runGenerated}
-              disabled={loading || generating}
+              disabled={loading || generating || !generationIsCurrent}
+              title={generationIsCurrent ? undefined : "Regenerate the tests: the requirements changed"}
               className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 font-semibold text-white shadow hover:bg-emerald-700 disabled:opacity-60"
             >
               {runningFrom === "ai" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}

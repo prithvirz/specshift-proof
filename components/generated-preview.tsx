@@ -1,7 +1,7 @@
 import { Sparkles } from "lucide-react";
-import type { GeneratedTests } from "@/lib/ai/schema";
+import type { GenerationRecord } from "@/lib/ai/generation-record";
 
-export function GeneratedPreview({ generated }: { generated: GeneratedTests }) {
+export function GeneratedPreview({ generated }: { generated: GenerationRecord["output"] }) {
   return (
     <section className="space-y-4 rounded-xl border border-violet-200 bg-white p-5 shadow-sm" aria-label="AI-generated tests">
       <div className="rounded-lg bg-violet-50 p-4">

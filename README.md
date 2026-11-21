@@ -56,7 +56,7 @@ Other scripts: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`,
 ## Using the dashboard
 
 1. **Seeded demo:** click **Run Regression Tests** to execute the three seeded cases.
-2. **AI generation:** click **Generate Tests with AI**. Gemini reads both requirements and returns a change summary plus 5 to 8 proposed cases, each with a reason. Review them, then click **Run Generated Tests**.
+2. **AI generation:** click **Generate Tests with AI**. Gemini reads both requirements and returns a change summary plus 5 to 8 proposed cases, each with a reason. Review them, then click **Run Generated Tests**. The generated cases are bound to the exact requirement text sent to Gemini. If you edit either requirement afterward, **Run Generated Tests** is disabled until you regenerate. If a regeneration fails, the previous cases stay unchanged and the error says so.
 3. **Scenario editor:** enter a proposed threshold *T* (whole hours, 0 to 168, default 2), review the generated boundary cases, then click **Run Scenario Tests**.
 4. **Evidence report:** after any run, click **View Evidence Report** below the results.
 
