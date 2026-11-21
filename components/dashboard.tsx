@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { VerdictBanner } from "@/components/verdict-banner";
+import { describeVerdict, shouldNavigateToResults } from "@/lib/report/verdict";
 import { describeExpectationSource, requirementsDifferFromSeedDefaults } from "@/lib/report/expectation-source";
 import { Loader2, Play, ShieldCheck, Info, AlertCircle, Sparkles, FileText, History, CheckCircle2 } from "lucide-react";
 import { ScenarioEditor } from "@/components/scenario-editor";
@@ -62,6 +64,16 @@ async function readError(res: Response): Promise<string> {
   return `Request failed with status ${res.status}.`;
 }
 
+/** Run-error alert, rendered next to the button that started the run. */
+function RunError({ message }: { message: string }) {
+  return (
+    <div role="alert" className="flex gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
+      <AlertCircle className="mt-0.5 size-4 shrink-0" />
+      <p>{message}</p>
+    </div>
+  );
+}
+
 /** Thrown for failures that already have a user-facing message. */
 class UserFacingError extends Error {}
 
@@ -81,7 +93,10 @@ export function Dashboard() {
   const [snapshot, setSnapshot] = useState<EvidenceSnapshot | null>(null);
   const [showEvidence, setShowEvidence] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The run error and which button started that run, so the error appears next to it.
+  const [runError, setRunError] = useState<{ from: EvidenceSource; message: string } | null>(null);
+  const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const navigatedSnapshotRef = useRef<EvidenceSnapshot | null>(null);
   const [runningFrom, setRunningFrom] = useState<EvidenceSource | null>(null);
   const [generation, setGeneration] = useState<GenerationState>(initialGenerationState);
   const [generating, setGenerating] = useState(false);
@@ -109,7 +124,7 @@ export function Dashboard() {
     const captured = { ...requirements, cases: cases.map((c) => ({ ...c })) };
     setLoading(true);
     setRunningFrom(from);
-    setError(null);
+    setRunError(null);
     try {
       const res = await fetchOrExplain("/api/run-tests", {
         method: "POST",
@@ -132,7 +147,7 @@ export function Dashboard() {
       );
     } catch (e) {
       setSnapshot(null);
-      setError(e instanceof Error ? e.message : "Unexpected error running tests.");
+      setRunError({ from, message: e instanceof Error ? e.message : "Unexpected error running tests." });
     } finally {
       setLoading(false);
       setRunningFrom(null);
@@ -196,7 +211,19 @@ export function Dashboard() {
         : null,
     [snapshot, oldReq, newReq, generated, threshold.value],
   );
+  // Scroll to and focus the results only when a new snapshot arrives, never on unrelated state changes.
+  useEffect(() => {
+    if (!shouldNavigateToResults(navigatedSnapshotRef.current, snapshot)) return;
+    navigatedSnapshotRef.current = snapshot;
+    const heading = resultsHeadingRef.current;
+    if (!heading) return;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    heading.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+    heading.focus({ preventScroll: true });
+  }, [snapshot]);
+
   const failures = snapshot?.results.filter((r) => r.status === "fail") ?? [];
+  const verdict = snapshot ? describeVerdict(snapshot) : null;
   const expectations = snapshot ? describeExpectationSource(snapshot.source, snapshot.scenario) : null;
   const seededTextEdited = requirementsDifferFromSeedDefaults({ oldRequirement: oldReq, newRequirement: newReq });
   const areaClass =
@@ -255,6 +282,7 @@ export function Dashboard() {
             {generating ? "Generating..." : "Generate Tests with AI"}
           </button>
         </div>
+        {runError?.from === "seeded" && <RunError message={runError.message} />}
         {seededTextEdited && (
           <p className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900" role="status">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
@@ -318,6 +346,7 @@ export function Dashboard() {
               {runningFrom === "ai" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
               {runningFrom === "ai" ? "Running..." : "Run Generated Tests"}
             </button>
+            {runError?.from === "ai" && <RunError message={runError.message} />}
           </div>
         )}
 
@@ -332,20 +361,31 @@ export function Dashboard() {
           running={runningFrom === "scenario"}
         />
 
-        {error && (
-          <div role="alert" className="flex gap-2 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
-            <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <p>{error}</p>
-          </div>
-        )}
+        {runError?.from === "scenario" && <RunError message={runError.message} />}
 
         {snapshot && (
-          <section className="space-y-4" aria-live="polite">
-            <p className="text-sm font-semibold text-slate-700">
+          <section
+            className={`scroll-mt-4 space-y-4 transition-opacity ${loading ? "opacity-60" : ""}`}
+            aria-live="polite"
+            aria-busy={loading}
+            aria-labelledby="results-heading"
+          >
+            <h2
+              id="results-heading"
+              ref={resultsHeadingRef}
+              tabIndex={-1}
+              className="scroll-mt-4 rounded text-sm font-semibold text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+            >
               Results for {sourceLabel(snapshot.source)}
               {snapshot.scenario ? ` (proposed threshold: ${snapshot.scenario.thresholdHours} hours)` : ""}, executed by
               the legacy function
-            </p>
+            </h2>
+            {loading && (
+              <p className="flex items-center gap-2 text-xs text-slate-500">
+                <Loader2 className="size-3.5 animate-spin" /> Running new tests. The results below are from the previous
+                run until the new results arrive.
+              </p>
+            )}
             {expectations && (
               <p
                 className={`rounded-lg border p-3 text-sm ${
@@ -377,6 +417,7 @@ export function Dashboard() {
                 </p>
               </div>
             )}
+            {verdict && <VerdictBanner verdict={verdict} />}
             <SummaryBar summary={snapshot.summary} />
             {isScenarioNoRegression(snapshot) && snapshot.scenario && (
               <div className="flex gap-2 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900" role="status">
